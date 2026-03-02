@@ -1,7 +1,9 @@
 // @ts-nocheck
 /**
  * Script TypeScript para Excel - Automatización de listado de álbumes
- *
+ * 
+ * 
+ * 
  * Este script:
  * 1. Busca todas las celdas que comienzan con '*' (marcador de álbumes)
  * 2. Para cada álbum, extrae las notas de las canciones siguientes
