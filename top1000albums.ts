@@ -211,8 +211,9 @@ function main(workbook: ExcelScript.Workbook) {
     }
 
     if (generoColIdx !== -1 && artistaColIdx !== -1 && albumColIdx !== -1) {
-        const maxRows = 500;
-        const dataReadRange = sheet.getRangeByIndexes(startRow + 1, columnaRanking, maxRows, currentHeaders.length);
+        const maxRows = 1000;
+        // Data starts at startRow + 2 (startRow + 1 is the header row)
+        const dataReadRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking, maxRows, currentHeaders.length);
         const dataReadValues = dataReadRange.getValues();
 
         for (let i = 0; i < dataReadValues.length; i++) {
@@ -225,6 +226,9 @@ function main(workbook: ExcelScript.Workbook) {
                 generoMap[`${art}|${alb}`] = gen;
             }
         }
+        console.log(`Géneros leídos de la tabla: ${Object.keys(generoMap).length}`);
+    } else {
+        console.log(`AVISO: No se pudieron leer los géneros (generoColIdx=${generoColIdx}, artistaColIdx=${artistaColIdx}, albumColIdx=${albumColIdx}). ¿Es la primera ejecución?`);
     }
 
     // Asignar géneros leídos a los álbumes
