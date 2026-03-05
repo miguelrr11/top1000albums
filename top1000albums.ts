@@ -911,8 +911,12 @@ function main(workbook: ExcelScript.Workbook) {
         const cancionesPorAlbum = totalCancionesGlobal / albums.length;
 
         // Álbum más y menos consistente
-        const albumMasConsistente = [...albums].sort((a, b) => a.desviacionTipica - b.desviacionTipica)[0];
-        const albumMenosConsistente = [...albums].sort((a, b) => b.desviacionTipica - a.desviacionTipica)[0];
+        // Filtrar álbumes con al menos 2 canciones
+        const albumsValidos = albums.filter(album => album.totalCanciones >= 2);
+
+        // Álbum más y menos consistente
+        const albumMasConsistente = [...albumsValidos].sort((a, b) => a.desviacionTipica - b.desviacionTipica)[0];
+        const albumMenosConsistente = [...albumsValidos].sort((a, b) => b.desviacionTipica - a.desviacionTipica)[0];
 
         // Álbum mejor y peor
         const albumMejor = [...albums].sort((a, b) => b.media - a.media)[0];
