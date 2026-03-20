@@ -138,8 +138,8 @@ function main(workbook: ExcelScript.Workbook) {
 
           const thirdEyeScoreRaw =
             media -
-            (desviacionTipica * 0.2) +
-            ((mediana - media) * 0.15) +
+            (desviacionTipica * 0.125) +
+            ((mediana - media) * 0.2) +
             (num105 * 0.15) +
             ((notasMayoresIgual10 / totalCanciones) * 0.2);
 
