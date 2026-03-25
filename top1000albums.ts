@@ -747,6 +747,7 @@ function main(workbook: ExcelScript.Workbook) {
   // tabla top 20 albumes sin repetir artistas (sort by thirdEyeScore siempre)
   const top20SinRepetir = albums
     .filter((album, index, self) =>
+      !album.album.includes("[OST]") &&
       index === self.findIndex(a => a.artista === album.artista)
     )
     .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
@@ -766,7 +767,7 @@ function main(workbook: ExcelScript.Workbook) {
   const top20TituloRange = sheet.getRangeByIndexes(top20StartRow, columnaRanking, 1, headersTop20.length);
   top20TituloRange.merge();
   const top20TituloCell = sheet.getCell(top20StartRow, columnaRanking);
-  top20TituloCell.setValue('TOP 20 SIN REPETIR ARTISTAS');
+  top20TituloCell.setValue('TOP 20 (sin repetir artistas y sin incluir OSTs)');
   top20TituloRange.getFormat().getFont().setBold(true);
   top20TituloRange.getFormat().getFont().setSize(13);
   top20TituloRange.getFormat().getFill().setColor('#1A252F');
