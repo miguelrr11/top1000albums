@@ -48,6 +48,9 @@ function main(workbook: ExcelScript.Workbook) {
     genero: string;
     num105: number;
     thirdEyeScore: number;
+    year: number;
+    duration: string;
+    durationMinutes: number;
   }
 
   const artistasMap: {
@@ -159,6 +162,9 @@ function main(workbook: ExcelScript.Workbook) {
             genero: '',
             num105,
             thirdEyeScore,
+            year: 0,
+            duration: '',
+            durationMinutes: 0,
           });
         }
       }
@@ -182,7 +188,9 @@ function main(workbook: ExcelScript.Workbook) {
     'Notas ≥10',
     'Total Canciones',
     'Interludios',
-    'Género'
+    'Género',
+    'Año',
+    'Duración'
   ];
 
   // ========== LEER HEADERS ANTES DE LIMPIAR ==========
@@ -202,15 +210,22 @@ function main(workbook: ExcelScript.Workbook) {
   let generoColIdx = -1;
   let artistaColIdx = -1;
   let albumColIdx = -1;
+  let yearColIdx = -1;
+  let durationColIdx = -1;
 
   for (let i = 0; i < currentHeaders.length; i++) {
     const h = currentHeaders[i]?.toString().replace(/\*/g, '').trim();
     if (h === 'Género') generoColIdx = i;
     if (h === 'Artista') artistaColIdx = i;
     if (h === 'Álbum') albumColIdx = i;
+    if (h === 'Year' || h === 'Año') yearColIdx = i;
+    if (h === 'Duration' || h === 'Duración') durationColIdx = i;
   }
 
-  if (generoColIdx !== -1 && artistaColIdx !== -1 && albumColIdx !== -1) {
+  const yearMap: { [key: string]: number } = {};
+  const durationMap: { [key: string]: string } = {};
+
+  if (artistaColIdx !== -1 && albumColIdx !== -1) {
     const maxRows = 1000;
     // Data starts at startRow + 2 (startRow + 1 is the header row)
     const dataReadRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking, maxRows, currentHeaders.length);
@@ -219,21 +234,49 @@ function main(workbook: ExcelScript.Workbook) {
     for (let i = 0; i < dataReadValues.length; i++) {
       const art = dataReadValues[i][artistaColIdx]?.toString().trim();
       const alb = dataReadValues[i][albumColIdx]?.toString().trim();
-      const gen = dataReadValues[i][generoColIdx]?.toString().trim();
 
       if (!art && !alb) break;
-      if (art && alb && gen) {
-        generoMap[`${art}|${alb}`] = gen;
+      if (art && alb) {
+        const key = `${art}|${alb}`;
+        if (generoColIdx !== -1) {
+          const gen = dataReadValues[i][generoColIdx]?.toString().trim();
+          if (gen) generoMap[key] = gen;
+        }
+        if (yearColIdx !== -1) {
+          const yr = dataReadValues[i][yearColIdx];
+          const yrNum = typeof yr === 'number' ? yr : parseInt(yr?.toString().trim() || '');
+          if (!isNaN(yrNum) && yrNum > 1900 && yrNum < 2100) yearMap[key] = yrNum;
+        }
+        if (durationColIdx !== -1) {
+          const dur = dataReadValues[i][durationColIdx]?.toString().trim();
+          if (dur && dur !== '0') durationMap[key] = dur;
+        }
       }
     }
-    console.log(`Géneros leídos de la tabla: ${Object.keys(generoMap).length}`);
+    console.log(`Géneros leídos: ${Object.keys(generoMap).length}, Años: ${Object.keys(yearMap).length}, Duraciones: ${Object.keys(durationMap).length}`);
+    console.log(`Índices de columna → artista:${artistaColIdx} álbum:${albumColIdx} género:${generoColIdx} año:${yearColIdx} duración:${durationColIdx}`);
+    if (Object.keys(yearMap).length > 0) console.log(`Muestra año: ${Object.entries(yearMap).slice(0, 3).map(([k,v]) => `${k}=${v}`).join(', ')}`);
+    if (Object.keys(durationMap).length > 0) console.log(`Muestra duración: ${Object.entries(durationMap).slice(0, 3).map(([k,v]) => `${k}=${v}`).join(', ')}`);
   } else {
-    console.log(`AVISO: No se pudieron leer los géneros (generoColIdx=${generoColIdx}, artistaColIdx=${artistaColIdx}, albumColIdx=${albumColIdx}). ¿Es la primera ejecución?`);
+    console.log(`AVISO: No se pudieron leer datos de la tabla (artistaColIdx=${artistaColIdx}, albumColIdx=${albumColIdx}). ¿Es la primera ejecución?`);
   }
 
-  // Asignar géneros leídos a los álbumes
+  // Helper: parse duration string "1h 12m" / "54m" / "1h 0m" → minutes
+  function parseDurationToMinutes(dur: string): number {
+    const hMatch = dur.match(/(\d+)h/);
+    const mMatch = dur.match(/(\d+)m/);
+    const hours = hMatch ? parseInt(hMatch[1]) : 0;
+    const mins = mMatch ? parseInt(mMatch[1]) : 0;
+    return hours * 60 + mins;
+  }
+
+  // Asignar géneros, años y duraciones leídos a los álbumes
   for (const alb of albums) {
-    alb.genero = generoMap[`${alb.artista}|${alb.album}`] || alb.genero;
+    const key = `${alb.artista}|${alb.album}`;
+    alb.genero = generoMap[key] || alb.genero;
+    alb.year = yearMap[key] || 0;
+    alb.duration = durationMap[key] || '';
+    alb.durationMinutes = alb.duration ? parseDurationToMinutes(alb.duration) : 0;
   }
 
   // ========== LIMPIAR ÁREA DE TABLAS ==========
@@ -263,6 +306,10 @@ function main(workbook: ExcelScript.Workbook) {
     'Interludios': 'interludios',
     'Género': 'genero',
     '3rd EYE SCORE': 'thirdEyeScore',
+    'Año': 'year',
+    'Year': 'year',
+    'Duración': 'durationMinutes',
+    'Duration': 'durationMinutes',
   };
 
   // Detectar qué header tiene asterisco en tabla principal
@@ -401,7 +448,9 @@ function main(workbook: ExcelScript.Workbook) {
     album.notasMayoresIgual10,
     album.totalCanciones,
     album.interludios,
-    album.genero
+    album.genero,
+    album.year || '',
+    album.duration || ''
   ]);
 
   // OPTIMIZACIÓN: Escribir todos los datos de una vez
@@ -428,6 +477,12 @@ function main(workbook: ExcelScript.Workbook) {
 
     const mediaColumn = sheet.getRangeByIndexes(startRow + 2, columnaInicio + 2, dataRows.length, 1);
     mediaColumn.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    //center alignment for year and duration
+    const yearColumn = sheet.getRangeByIndexes(startRow + 2, columnaInicio + 10, dataRows.length, 1);
+    yearColumn.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    const durationColumn = sheet.getRangeByIndexes(startRow + 2, columnaInicio + 11, dataRows.length, 1);
+    durationColumn.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
     // Aplicar colores de forma más eficiente
     // Primero aplicar colores de filas alternas a todo el rango
@@ -507,6 +562,8 @@ function main(workbook: ExcelScript.Workbook) {
     totalCanciones: number;
     interludios: number;
     generos?: string[];
+    yearRange: string;
+    avgDuration: string;
   }
   let artistasStats: ArtistaStats[] = [];
 
@@ -517,6 +574,25 @@ function main(workbook: ExcelScript.Workbook) {
       const albumesArtista = artistasMap[artista];
       const numAlbumes = albumesArtista.length;
       const avgThirdEye = albumesArtista.reduce((sum, a) => sum + a.thirdEyeScore, 0) / numAlbumes;
+
+      // Year range
+      const anosConDato = albumesArtista.filter(a => a.year > 0).map(a => a.year);
+      let yearRange = '';
+      if (anosConDato.length > 0) {
+        const anoMin = Math.min(...anosConDato);
+        const anoMax = Math.max(...anosConDato);
+        yearRange = anoMin === anoMax ? `${anoMin}` : `${anoMin} - ${anoMax}`;
+      }
+
+      // Average duration
+      const albumsConDurArtista = albumesArtista.filter(a => a.durationMinutes > 0);
+      let avgDuration = '';
+      if (albumsConDurArtista.length > 0) {
+        const avgMin = Math.round(albumsConDurArtista.reduce((s, a) => s + a.durationMinutes, 0) / albumsConDurArtista.length);
+        const h = Math.floor(avgMin / 60);
+        const m = avgMin % 60;
+        avgDuration = h > 0 ? `${h}h ${m}m` : `${m}m`;
+      }
 
       return {
         artista: artista,
@@ -530,7 +606,9 @@ function main(workbook: ExcelScript.Workbook) {
         totalCanciones: albumesArtista.reduce((sum, a) => sum + a.totalCanciones, 0),
         // Total de interludios en todos los álbumes del artista
         interludios: albumesArtista.reduce((sum, a) => sum + a.interludios, 0),
-        thirdEyeScore: Math.round(avgThirdEye * 100) / 100, // NEW
+        thirdEyeScore: Math.round(avgThirdEye * 100) / 100,
+        yearRange,
+        avgDuration,
       };
     });
 
@@ -650,7 +728,9 @@ function main(workbook: ExcelScript.Workbook) {
       album.notasMayoresIgual10,
       album.totalCanciones,
       album.interludios,
-      album.genero
+      album.genero,
+      album.year || '',
+      album.duration || ''
     ]);
 
     // Preparar datos
@@ -659,13 +739,15 @@ function main(workbook: ExcelScript.Workbook) {
       artistaStats.artista,
       artistaStats.numAlbumes,
       artistaStats.media,
-      artistaStats.thirdEyeScore, // NEW
+      artistaStats.thirdEyeScore,
       artistaStats.mediana,
       artistaStats.desviacionTipica,
       artistaStats.notasMayoresIgual10,
       artistaStats.totalCanciones,
       artistaStats.interludios,
-      artistaStats.generos ? artistaStats.generos.join(', ') : ''
+      artistaStats.generos ? artistaStats.generos.join(', ') : '',
+      artistaStats.yearRange,
+      artistaStats.avgDuration,
     ]);
 
     // Escribir datos
@@ -1046,6 +1128,160 @@ function main(workbook: ExcelScript.Workbook) {
         resumenData.push([g.nombre, `${g.count} (${g.media})`]);
       }
     }
+
+    // --- Estadísticas de año ---
+    const albumsConAno = albums.filter(a => a.year > 0);
+    if (albumsConAno.length > 0) {
+      const anos = albumsConAno.map(a => a.year);
+      const anoMin = Math.min(...anos);
+      const anoMax = Math.max(...anos);
+
+      // Décadas
+      const decadaMap: { [d: string]: { count: number; totalScore: number } } = {};
+      for (const a of albumsConAno) {
+        const decada = `${Math.floor(a.year / 10) * 10}s`;
+        if (!decadaMap[decada]) decadaMap[decada] = { count: 0, totalScore: 0 };
+        decadaMap[decada].count++;
+        decadaMap[decada].totalScore += a.thirdEyeScore;
+      }
+      const decadasSorted = Object.keys(decadaMap).sort();
+
+      // Decade con más álbumes
+      const decadaTop = decadasSorted.reduce((best, d) =>
+        decadaMap[d].count > decadaMap[best].count ? d : best, decadasSorted[0]);
+      // Decade con mejor puntuación media
+      const decadaTopScore = decadasSorted.reduce((best, d) =>
+        (decadaMap[d].totalScore / decadaMap[d].count) > (decadaMap[best].totalScore / decadaMap[best].count) ? d : best, decadasSorted[0]);
+
+      resumenData.push(
+        ['', ''],
+        ['AÑO', ''],
+        ['Álbumes con año', `${albumsConAno.length} de ${albums.length}`],
+        ['Año más antiguo', anoMin],
+        ['Año más reciente', anoMax],
+        ['Décadas con más álbumes', `${decadaTop} (${decadaMap[decadaTop].count})`],
+        ['Década mejor puntuada', `${decadaTopScore} (${rd(decadaMap[decadaTopScore].totalScore / decadaMap[decadaTopScore].count)})`],
+        ['', ''],
+        ['ÁLBUMES POR DÉCADA', '']
+      );
+      for (const d of decadasSorted) {
+        const avgScore = rd(decadaMap[d].totalScore / decadaMap[d].count);
+        resumenData.push([d, `${decadaMap[d].count} álbumes · media ${avgScore}`]);
+      }
+    }
+
+    // --- Estadísticas de duración ---
+    const albumsConDur = albums.filter(a => a.durationMinutes > 0);
+    if (albumsConDur.length > 0) {
+      const durs = albumsConDur.map(a => a.durationMinutes);
+      const durMin = Math.min(...durs);
+      const durMax = Math.max(...durs);
+      const durMedia = durs.reduce((s, v) => s + v, 0) / durs.length;
+
+      const albumMasLargo = albumsConDur.reduce((best, a) => a.durationMinutes > best.durationMinutes ? a : best);
+      const albumMasCorto = albumsConDur.reduce((best, a) => a.durationMinutes < best.durationMinutes ? a : best);
+
+      function minutesToDisplay(m: number): string {
+        const h = Math.floor(m / 60);
+        const min = m % 60;
+        return h > 0 ? `${h}h ${min}m` : `${min}m`;
+      }
+
+      resumenData.push(
+        ['', ''],
+        ['DURACIÓN', ''],
+        ['Álbumes con duración', `${albumsConDur.length} de ${albums.length}`],
+        ['Duración media', minutesToDisplay(Math.round(durMedia))],
+        ['Más largo', `${albumMasLargo.artista} - ${albumMasLargo.album} (${minutesToDisplay(durMax)})`],
+        ['Más corto', `${albumMasCorto.artista} - ${albumMasCorto.album} (${minutesToDisplay(durMin)})`],
+      );
+    }
+
+    // --- Correlaciones entre atributos y puntuación ---
+    function pearsonCorr(xs: number[], ys: number[]): number {
+      const nn = xs.length;
+      if (nn < 3) return 0;
+      const mx = xs.reduce((s, v) => s + v, 0) / nn;
+      const my = ys.reduce((s, v) => s + v, 0) / nn;
+      const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
+      const dx = Math.sqrt(xs.reduce((s, v) => s + Math.pow(v - mx, 2), 0));
+      const dy = Math.sqrt(ys.reduce((s, v) => s + Math.pow(v - my, 2), 0));
+      if (dx === 0 || dy === 0) return 0;
+      return Math.round((num / (dx * dy)) * 1000) / 1000;
+    }
+
+    function corrLabel(r: number): string {
+      const abs = Math.abs(r);
+      const dir = r >= 0 ? '↑' : '↓';
+      if (abs >= 0.7) return `${dir} fuerte`;
+      if (abs >= 0.4) return `${dir} moderada`;
+      if (abs >= 0.2) return `${dir} débil`;
+      return '≈ nula';
+    }
+
+    const scores = albums.map(a => a.thirdEyeScore);
+
+    const corrCanciones = pearsonCorr(albums.map(a => a.totalCanciones), scores);
+    const corrInterludios = pearsonCorr(albums.map(a => a.interludios), scores);
+    const corrDesv = pearsonCorr(albums.map(a => a.desviacionTipica), scores);
+    const corrNotas10 = pearsonCorr(albums.map(a => a.notasMayoresIgual10), scores);
+
+    // Only include year/duration correlations if enough data
+    const albumsConAnoScores = albums.filter(a => a.year > 0);
+    const corrAno = albumsConAnoScores.length >= 3
+      ? pearsonCorr(albumsConAnoScores.map(a => a.year), albumsConAnoScores.map(a => a.thirdEyeScore))
+      : null;
+
+    const albumsConDurScores = albums.filter(a => a.durationMinutes > 0);
+    const corrDur = albumsConDurScores.length >= 3
+      ? pearsonCorr(albumsConDurScores.map(a => a.durationMinutes), albumsConDurScores.map(a => a.thirdEyeScore))
+      : null;
+
+    // Porcentaje de interludios vs score
+    const corrPctInterludio = pearsonCorr(
+      albums.map(a => a.totalCanciones > 0 ? a.interludios / a.totalCanciones : 0),
+      scores
+    );
+
+    resumenData.push(
+      ['', ''],
+      ['CORRELACIONES CON 3RD EYE SCORE', ''],
+      ['(r: −1 negativa · 0 nula · +1 positiva)', ''],
+      ['Total canciones', `r=${corrCanciones} · ${corrLabel(corrCanciones)}`],
+      ['Interludios (absoluto)', `r=${corrInterludios} · ${corrLabel(corrInterludios)}`],
+      ['% Interludios', `r=${corrPctInterludio} · ${corrLabel(corrPctInterludio)}`],
+      ['Desviación típica', `r=${corrDesv} · ${corrLabel(corrDesv)}`],
+      ['Notas ≥10', `r=${corrNotas10} · ${corrLabel(corrNotas10)}`],
+    );
+
+    if (corrAno !== null) {
+      resumenData.push(['Año de publicación', `r=${corrAno} · ${corrLabel(corrAno)}`]);
+    }
+    if (corrDur !== null) {
+      resumenData.push(['Duración (minutos)', `r=${corrDur} · ${corrLabel(corrDur)}`]);
+    }
+
+    // Insight: cual atributo correlaciona más fuerte
+    const corrPairs: [string, number][] = [
+      ['Total canciones', corrCanciones],
+      ['Interludios', corrInterludios],
+      ['% Interludios', corrPctInterludio],
+      ['Desviación típica', corrDesv],
+      ['Notas ≥10', corrNotas10],
+    ];
+    if (corrAno !== null) corrPairs.push(['Año', corrAno]);
+    if (corrDur !== null) corrPairs.push(['Duración', corrDur]);
+
+    const strongestCorr = corrPairs.reduce((best, cur) =>
+      Math.abs(cur[1]) > Math.abs(best[1]) ? cur : best);
+    const weakestCorr = corrPairs.reduce((best, cur) =>
+      Math.abs(cur[1]) < Math.abs(best[1]) ? cur : best);
+
+    resumenData.push(
+      ['', ''],
+      ['Mayor correlación', `${strongestCorr[0]} (r=${strongestCorr[1]})`],
+      ['Menor correlación', `${weakestCorr[0]} (r=${weakestCorr[1]})`],
+    );
 
     // Escribir título de la tabla
     const tituloRange = sheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
