@@ -255,8 +255,8 @@ function main(workbook: ExcelScript.Workbook) {
     }
     console.log(`Géneros leídos: ${Object.keys(generoMap).length}, Años: ${Object.keys(yearMap).length}, Duraciones: ${Object.keys(durationMap).length}`);
     console.log(`Índices de columna → artista:${artistaColIdx} álbum:${albumColIdx} género:${generoColIdx} año:${yearColIdx} duración:${durationColIdx}`);
-    if (Object.keys(yearMap).length > 0) console.log(`Muestra año: ${Object.entries(yearMap).slice(0, 3).map(([k,v]) => `${k}=${v}`).join(', ')}`);
-    if (Object.keys(durationMap).length > 0) console.log(`Muestra duración: ${Object.entries(durationMap).slice(0, 3).map(([k,v]) => `${k}=${v}`).join(', ')}`);
+    if (Object.keys(yearMap).length > 0) console.log(`Muestra año: ${Object.entries(yearMap).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+    if (Object.keys(durationMap).length > 0) console.log(`Muestra duración: ${Object.entries(durationMap).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(', ')}`);
   } else {
     console.log(`AVISO: No se pudieron leer datos de la tabla (artistaColIdx=${artistaColIdx}, albumColIdx=${albumColIdx}). ¿Es la primera ejecución?`);
   }
@@ -618,7 +618,7 @@ function main(workbook: ExcelScript.Workbook) {
     const artistasStartRow = startRow + albums.length + 3; // +1 título principal, +1 cabecera, +1 fila en blanco
 
     // Detectar qué header tiene asterisco en tabla de artistas (leídos antes del clear)
-    let artistasSortBy: keyof ArtistaStats = 'media'; // Default
+    let artistasSortBy: keyof ArtistaStats = 'thirdEyeScore'; // Default
     let artistasHeaderWithAsterisk: string | null = null;
     let artistasAsteriskCount = 0;
 
@@ -642,8 +642,8 @@ function main(workbook: ExcelScript.Workbook) {
 
     // Si no hay asterisco o hay más de uno, usar Media por defecto
     if (artistasAsteriskCount !== 1) {
-      artistasSortBy = 'media';
-      artistasHeaderWithAsterisk = 'Media';
+      artistasSortBy = 'thirdEyeScore';
+      artistasHeaderWithAsterisk = 'Puntuación Third Eye';
     }
 
     console.log(`Ordenando tabla artistas por: ${artistasSortBy} (header con asterisco: "${artistasHeaderWithAsterisk}")`);
