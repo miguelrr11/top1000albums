@@ -111,6 +111,7 @@ function main(workbook: ExcelScript.Workbook) {
    */
   interface ColumnDef {
     header: string;
+    numberFormat?: string;
     property: keyof AlbumInfo | '#';
     persistent: boolean;
     sortProperty?: keyof AlbumInfo;
@@ -282,21 +283,36 @@ function main(workbook: ExcelScript.Workbook) {
     },
     {
       header: 'Fecha de review',
+      numberFormat: '@',
       property: 'dateOfReview',
       persistent: true,
       align: 'center',
       sortProperty: 'dateOfReviewTimestamp',
       parseValue: (raw) => {
         if (typeof raw === 'number' && raw > 0) {
-          // Excel stores dates as serial numbers (days since 1899-12-30)
-          const date = new Date((raw - 25569) * 86400000);
-          const d: string = date.getUTCDate().toString().padStart(2, '0');
-          const mo: string = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-          const y: string = date.getUTCFullYear().toString();
+          const serial = Math.floor(raw);
+          const date = new Date((serial - 25569) * 86400000);
+          const d = date.getUTCDate().toString().padStart(2, '0');
+          const mo = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+          const y = date.getUTCFullYear().toString();
           return `${d}/${mo}/${y}`;
         }
-        const s: string = raw.toString().trim();
-        return s || null;
+
+        const s = raw.toString().trim();
+        if (!s) return null;
+
+        // Normalizar string a DD/MM/YYYY
+        // Excel suele mandar M/D/YYYY o D/M/YYYY sin ceros — reconstruimos con padding
+        const parts = s.split('/');
+        if (parts.length === 3) {
+          const [p0, p1, p2] = parts.map(p => p.trim());
+          const d = p0.padStart(2, '0');   // día
+          const mo = p1.padStart(2, '0');  // mes
+          const y = p2.length === 2 ? `20${p2}` : p2; // "26" → "2026"
+          return `${d}/${mo}/${y}`;
+        }
+
+        return s;
       },
       postAssign: (album) => {
         if (album.dateOfReview) {
@@ -308,7 +324,7 @@ function main(workbook: ExcelScript.Workbook) {
           }
         }
       },
-      artistValue: (stats) => '', // No tiene sentido mostrar esta columna en el resumen de artistas
+      artistValue: (stats) => '-', // No tiene sentido mostrar esta columna en el resumen de artistas
     }
   ];
 
@@ -584,6 +600,12 @@ function main(workbook: ExcelScript.Workbook) {
   );
 
   if (dataRows.length > 0) {
+    for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
+      const col = COLUMNS[colIdx];
+      const colRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking + colIdx, dataRows.length, 1);
+      if (col.numberFormat) colRange.setNumberFormatLocal(col.numberFormat);
+    }
+
     sheet.getRangeByIndexes(startRow + 2, columnaRanking, dataRows.length, headers.length)
       .setValues(dataRows);
 
@@ -594,6 +616,7 @@ function main(workbook: ExcelScript.Workbook) {
       if (col.bold)  colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
+      if (col.numberFormat) colRange.setNumberFormatLocal(col.numberFormat);
     }
 
     // Alternating row background (skip the # column)
@@ -772,6 +795,7 @@ function main(workbook: ExcelScript.Workbook) {
       if (col.bold)  colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
+      if (col.numberFormat) colRange.setNumberFormatLocal(col.numberFormat);
     }
 
     // Alternating row background (skip the # column)
