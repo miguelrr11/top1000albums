@@ -116,6 +116,7 @@ function main(workbook: ExcelScript.Workbook) {
     persistent: boolean;
     sortProperty?: keyof AlbumInfo;
     align?: 'center' | 'left' | 'right';
+    artistAlign?: 'center' | 'left' | 'right';
     bold?: boolean;
     colorFn?: (value: number) => string;
     artistHeader?: string;
@@ -199,6 +200,7 @@ function main(workbook: ExcelScript.Workbook) {
       property: 'album',
       persistent: false,
       artistHeader: 'Álbumes',
+      artistAlign: 'center',
       artistValue: (stats) => stats.numAlbumes,
       artistSortProperty: 'numAlbumes',
     },
@@ -616,6 +618,7 @@ function main(workbook: ExcelScript.Workbook) {
       if (col.bold)  colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
+      if (col.artistAlign) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.artistAlign));
       if (col.numberFormat) colRange.setNumberFormatLocal(col.numberFormat);
     }
 
@@ -795,6 +798,7 @@ function main(workbook: ExcelScript.Workbook) {
       if (col.bold)  colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
+      if (col.artistAlign) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.artistAlign));
       if (col.numberFormat) colRange.setNumberFormatLocal(col.numberFormat);
     }
 
