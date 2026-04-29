@@ -132,9 +132,9 @@ function main(workbook: ExcelScript.Workbook) {
     const lerp = (start: number, end: number, factor: number) =>
       Math.round(start + (end - start) * factor);
 
-    const colorRojo     = [255, 73,  77 ];
-    const colorAmarillo = [255, 245, 67 ];
-    const colorAzul     = [0,   176, 240];
+    const colorRojo = [255, 73, 77];
+    const colorAmarillo = [255, 245, 67];
+    const colorAzul = [0, 176, 240];
 
     let r: number, g: number, b: number;
 
@@ -173,7 +173,7 @@ function main(workbook: ExcelScript.Workbook) {
 
   function getAlignmentEnum(align: string) {
     if (align === 'center') return ExcelScript.HorizontalAlignment.center;
-    if (align === 'right')  return ExcelScript.HorizontalAlignment.right;
+    if (align === 'right') return ExcelScript.HorizontalAlignment.right;
     return ExcelScript.HorizontalAlignment.left;
   }
 
@@ -447,7 +447,7 @@ function main(workbook: ExcelScript.Workbook) {
   // =================== TABLE LAYOUT CONSTANTS ===================
 
   const columnaRanking = 17; // Column R (A=0 … R=17) — the '#' column
-  const columnaInicio  = 18; // Column S — data columns start here
+  const columnaInicio = 18; // Column S — data columns start here
   const startRow = 0;
 
   // =================== PRE-CLEAR: READ HEADERS & PERSISTENT DATA ===================
@@ -468,7 +468,7 @@ function main(workbook: ExcelScript.Workbook) {
   }
 
   const artistaColIdx = currentHeaderIndex['Artista'] ?? -1;
-  const albumColIdx   = currentHeaderIndex['Álbum']   ?? -1;
+  const albumColIdx = currentHeaderIndex['Álbum'] ?? -1;
 
   // One store per persistent column: { albumKey → value }
   const persistentData: { [colHeader: string]: { [albumKey: string]: string | number } } = {};
@@ -615,7 +615,7 @@ function main(workbook: ExcelScript.Workbook) {
     for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
       const col = COLUMNS[colIdx];
       const colRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking + colIdx, dataRows.length, 1);
-      if (col.bold)  colRange.getFormat().getFont().setBold(true);
+      if (col.bold) colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
       if (col.artistAlign) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.artistAlign));
@@ -795,7 +795,7 @@ function main(workbook: ExcelScript.Workbook) {
     for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
       const col = COLUMNS[colIdx];
       const colRange = sheet.getRangeByIndexes(artistasStartRow + 2, columnaRanking + colIdx, artistasDataRows.length, 1);
-      if (col.bold)  colRange.getFormat().getFont().setBold(true);
+      if (col.bold) colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
       if (col.artistAlign) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.artistAlign));
@@ -832,10 +832,8 @@ function main(workbook: ExcelScript.Workbook) {
   // =================== TOP 20 TABLE (sin repetir artistas, sin OSTs) ===================
 
   const top20SinRepetir = albums
-    .filter((album, index, self) =>
-      !album.album.includes("[OST]") &&
-      index === self.findIndex(a => a.artista === album.artista)
-    )
+    .filter(album => !album.album.includes("[OST]") && !album.album.includes("[LIVE]"))
+    .filter((album, index, eligible) => index === eligible.findIndex(a => a.artista === album.artista))
     .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
     .slice(0, 20);
 
@@ -846,7 +844,7 @@ function main(workbook: ExcelScript.Workbook) {
 
   const top20TituloRange = sheet.getRangeByIndexes(top20StartRow, columnaRanking, 1, headersTop20.length);
   top20TituloRange.merge();
-  sheet.getCell(top20StartRow, columnaRanking).setValue('TOP 20 (sin repetir artistas y sin incluir OSTs)');
+  sheet.getCell(top20StartRow, columnaRanking).setValue('TOP 20 (sin repetir artistas y sin incluir OSTs y LIVEs)');
   top20TituloRange.getFormat().getFont().setBold(true);
   top20TituloRange.getFormat().getFont().setSize(13);
   top20TituloRange.getFormat().getFill().setColor('#1A252F');
@@ -945,10 +943,10 @@ function main(workbook: ExcelScript.Workbook) {
     const cancionesPorAlbum = totalCancionesGlobal / albums.length;
 
     const albumsValidos = albums.filter(a => a.totalCanciones >= 2);
-    const albumMasConsistente  = [...albumsValidos].sort((a, b) => a.desviacionTipica - b.desviacionTipica)[0];
+    const albumMasConsistente = [...albumsValidos].sort((a, b) => a.desviacionTipica - b.desviacionTipica)[0];
     const albumMenosConsistente = [...albumsValidos].sort((a, b) => b.desviacionTipica - a.desviacionTipica)[0];
     const albumMejor = [...albums].sort((a, b) => b.media - a.media)[0];
-    const albumPeor  = [...albums].sort((a, b) => a.media - b.media)[0];
+    const albumPeor = [...albums].sort((a, b) => a.media - b.media)[0];
 
     const frecuencias: { [nota: string]: number } = {};
     for (const nota of todasLasNotas) {
@@ -961,10 +959,10 @@ function main(workbook: ExcelScript.Workbook) {
       if (freq > maxFreq) { maxFreq = freq; moda = parseFloat(nota); }
     }
 
-    const rango0a5  = todasLasNotas.filter(v => v < 5).length;
-    const rango5a7  = todasLasNotas.filter(v => v >= 5 && v < 7).length;
-    const rango7a8  = todasLasNotas.filter(v => v >= 7 && v < 8).length;
-    const rango8a9  = todasLasNotas.filter(v => v >= 8 && v < 9).length;
+    const rango0a5 = todasLasNotas.filter(v => v < 5).length;
+    const rango5a7 = todasLasNotas.filter(v => v >= 5 && v < 7).length;
+    const rango7a8 = todasLasNotas.filter(v => v >= 7 && v < 8).length;
+    const rango8a9 = todasLasNotas.filter(v => v >= 8 && v < 9).length;
     const rango9a10 = todasLasNotas.filter(v => v >= 9 && v < 10).length;
     const rango10plus = todasLasNotas.filter(v => v >= 10).length;
 
@@ -996,18 +994,18 @@ function main(workbook: ExcelScript.Workbook) {
       ['Curtosis (excess)', `${rd(kurtosis)} ${kurtosis > 0.5 ? '← colas pesadas' : kurtosis < -0.5 ? '← muy agrupadas' : '← normal'}`],
       ['', ''],
       ['DISTRIBUCIÓN POR RANGOS', ''],
-      ['[0, 5)',    `${rango0a5}   (${rd(rango0a5   / n * 100)}%)`],
-      ['[5, 7)',    `${rango5a7}   (${rd(rango5a7   / n * 100)}%)`],
-      ['[7, 8)',    `${rango7a8}   (${rd(rango7a8   / n * 100)}%)`],
-      ['[8, 9)',    `${rango8a9}   (${rd(rango8a9   / n * 100)}%)`],
-      ['[9, 10)',   `${rango9a10}  (${rd(rango9a10  / n * 100)}%)`],
-      ['[10, 10.5]',`${rango10plus}(${rd(pctGe10)}%)`],
+      ['[0, 5)', `${rango0a5}   (${rd(rango0a5 / n * 100)}%)`],
+      ['[5, 7)', `${rango5a7}   (${rd(rango5a7 / n * 100)}%)`],
+      ['[7, 8)', `${rango7a8}   (${rd(rango7a8 / n * 100)}%)`],
+      ['[8, 9)', `${rango8a9}   (${rd(rango8a9 / n * 100)}%)`],
+      ['[9, 10)', `${rango9a10}  (${rd(rango9a10 / n * 100)}%)`],
+      ['[10, 10.5]', `${rango10plus}(${rd(pctGe10)}%)`],
       ['', ''],
       ['DESTACADOS', ''],
-      ['Mejor álbum',                    `${albumMejor.artista} - ${albumMejor.album} (${albumMejor.media})`],
-      ['Peor álbum',                     `${albumPeor.artista} - ${albumPeor.album} (${albumPeor.media})`],
-      ['Más consistente (menor desv.)',  `${albumMasConsistente.artista} - ${albumMasConsistente.album} (σ=${albumMasConsistente.desviacionTipica})`],
-      ['Más irregular (mayor desv.)',    `${albumMenosConsistente.artista} - ${albumMenosConsistente.album} (σ=${albumMenosConsistente.desviacionTipica})`],
+      ['Mejor álbum', `${albumMejor.artista} - ${albumMejor.album} (${albumMejor.media})`],
+      ['Peor álbum', `${albumPeor.artista} - ${albumPeor.album} (${albumPeor.media})`],
+      ['Más consistente (menor desv.)', `${albumMasConsistente.artista} - ${albumMasConsistente.album} (σ=${albumMasConsistente.desviacionTipica})`],
+      ['Más irregular (mayor desv.)', `${albumMenosConsistente.artista} - ${albumMenosConsistente.album} (σ=${albumMenosConsistente.desviacionTipica})`],
     ];
 
     // --- Genre stats ---
@@ -1035,16 +1033,16 @@ function main(workbook: ExcelScript.Workbook) {
       const generoMasFrecuente = generosSorted[0];
       const generosPorMedia = [...generosSorted].sort((a, b) => b.media - a.media);
       const generoMejor = generosPorMedia[0];
-      const generoPeor  = generosPorMedia[generosPorMedia.length - 1];
+      const generoPeor = generosPorMedia[generosPorMedia.length - 1];
 
       resumenData.push(
         ['', ''],
         ['GÉNEROS', ''],
-        ['Álbumes con género',  `${albumsConGenero} de ${albums.length}`],
-        ['Géneros únicos',      generosUnicos.length],
-        ['Más frecuente',       `${generoMasFrecuente.nombre} (${generoMasFrecuente.count})`],
-        ['Mejor media',         `${generoMejor.nombre} (${generoMejor.media})`],
-        ['Peor media',          `${generoPeor.nombre} (${generoPeor.media})`],
+        ['Álbumes con género', `${albumsConGenero} de ${albums.length}`],
+        ['Géneros únicos', generosUnicos.length],
+        ['Más frecuente', `${generoMasFrecuente.nombre} (${generoMasFrecuente.count})`],
+        ['Mejor media', `${generoMejor.nombre} (${generoMejor.media})`],
+        ['Peor media', `${generoPeor.nombre} (${generoPeor.media})`],
         ['', ''],
         ['DESGLOSE POR GÉNERO', '']
       );
@@ -1077,11 +1075,11 @@ function main(workbook: ExcelScript.Workbook) {
       resumenData.push(
         ['', ''],
         ['AÑO', ''],
-        ['Álbumes con año',          `${albumsConAno.length} de ${albums.length}`],
-        ['Año más antiguo',          anoMin],
-        ['Año más reciente',         anoMax],
-        ['Décadas con más álbumes',  `${decadaTop} (${decadaMap[decadaTop].count})`],
-        ['Década mejor puntuada',    `${decadaTopScore} (${rd(decadaMap[decadaTopScore].totalScore / decadaMap[decadaTopScore].count)})`],
+        ['Álbumes con año', `${albumsConAno.length} de ${albums.length}`],
+        ['Año más antiguo', anoMin],
+        ['Año más reciente', anoMax],
+        ['Décadas con más álbumes', `${decadaTop} (${decadaMap[decadaTop].count})`],
+        ['Década mejor puntuada', `${decadaTopScore} (${rd(decadaMap[decadaTopScore].totalScore / decadaMap[decadaTopScore].count)})`],
         ['', ''],
         ['ÁLBUMES POR DÉCADA', '']
       );
@@ -1111,9 +1109,9 @@ function main(workbook: ExcelScript.Workbook) {
         ['', ''],
         ['DURACIÓN', ''],
         ['Álbumes con duración', `${albumsConDur.length} de ${albums.length}`],
-        ['Duración media',       minutesToDisplay(Math.round(durMedia))],
-        ['Más largo',            `${albumMasLargo.artista} - ${albumMasLargo.album} (${minutesToDisplay(durMax)})`],
-        ['Más corto',            `${albumMasCorto.artista} - ${albumMasCorto.album} (${minutesToDisplay(durMin)})`],
+        ['Duración media', minutesToDisplay(Math.round(durMedia))],
+        ['Más largo', `${albumMasLargo.artista} - ${albumMasLargo.album} (${minutesToDisplay(durMax)})`],
+        ['Más corto', `${albumMasCorto.artista} - ${albumMasCorto.album} (${minutesToDisplay(durMin)})`],
       );
     }
 
@@ -1140,10 +1138,10 @@ function main(workbook: ExcelScript.Workbook) {
     }
 
     const scores = albums.map(a => a.thirdEyeScore);
-    const corrCanciones   = pearsonCorr(albums.map(a => a.totalCanciones),   scores);
-    const corrInterludios = pearsonCorr(albums.map(a => a.interludios),       scores);
-    const corrDesv        = pearsonCorr(albums.map(a => a.desviacionTipica),  scores);
-    const corrNotas10     = pearsonCorr(albums.map(a => a.notasMayoresIgual10), scores);
+    const corrCanciones = pearsonCorr(albums.map(a => a.totalCanciones), scores);
+    const corrInterludios = pearsonCorr(albums.map(a => a.interludios), scores);
+    const corrDesv = pearsonCorr(albums.map(a => a.desviacionTipica), scores);
+    const corrNotas10 = pearsonCorr(albums.map(a => a.notasMayoresIgual10), scores);
 
     const albumsConAnoScores = albums.filter(a => a.year > 0);
     const corrAno = albumsConAnoScores.length >= 3
@@ -1164,11 +1162,11 @@ function main(workbook: ExcelScript.Workbook) {
       ['', ''],
       ['CORRELACIONES CON 3RD EYE SCORE', ''],
       ['(r: −1 negativa · 0 nula · +1 positiva)', ''],
-      ['Total canciones',    `r=${corrCanciones}   · ${corrLabel(corrCanciones)}`],
+      ['Total canciones', `r=${corrCanciones}   · ${corrLabel(corrCanciones)}`],
       ['Interludios (absoluto)', `r=${corrInterludios} · ${corrLabel(corrInterludios)}`],
-      ['% Interludios',      `r=${corrPctInterludio} · ${corrLabel(corrPctInterludio)}`],
-      ['Desviación típica',  `r=${corrDesv}         · ${corrLabel(corrDesv)}`],
-      ['Notas ≥10',          `r=${corrNotas10}      · ${corrLabel(corrNotas10)}`],
+      ['% Interludios', `r=${corrPctInterludio} · ${corrLabel(corrPctInterludio)}`],
+      ['Desviación típica', `r=${corrDesv}         · ${corrLabel(corrDesv)}`],
+      ['Notas ≥10', `r=${corrNotas10}      · ${corrLabel(corrNotas10)}`],
     );
 
     if (corrAno !== null) resumenData.push(['Año de publicación', `r=${corrAno} · ${corrLabel(corrAno)}`]);
@@ -1176,16 +1174,16 @@ function main(workbook: ExcelScript.Workbook) {
 
     const corrPairs: [string, number][] = [
       ['Total canciones', corrCanciones],
-      ['Interludios',     corrInterludios],
-      ['% Interludios',   corrPctInterludio],
-      ['Desv. típica',    corrDesv],
-      ['Notas ≥10',       corrNotas10],
+      ['Interludios', corrInterludios],
+      ['% Interludios', corrPctInterludio],
+      ['Desv. típica', corrDesv],
+      ['Notas ≥10', corrNotas10],
     ];
-    if (corrAno !== null) corrPairs.push(['Año',      corrAno]);
+    if (corrAno !== null) corrPairs.push(['Año', corrAno]);
     if (corrDur !== null) corrPairs.push(['Duración', corrDur]);
 
     const strongestCorr = corrPairs.reduce((best, cur) => Math.abs(cur[1]) > Math.abs(best[1]) ? cur : best);
-    const weakestCorr   = corrPairs.reduce((best, cur) => Math.abs(cur[1]) < Math.abs(best[1]) ? cur : best);
+    const weakestCorr = corrPairs.reduce((best, cur) => Math.abs(cur[1]) < Math.abs(best[1]) ? cur : best);
 
     resumenData.push(
       ['', ''],
