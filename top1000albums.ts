@@ -835,7 +835,7 @@ function main(workbook: ExcelScript.Workbook) {
     .filter(album => !album.album.includes("[OST]") && !album.album.includes("[LIVE]"))
     .filter((album, index, eligible) => index === eligible.findIndex(a => a.artista === album.artista))
     .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
-    .slice(0, 20);
+    .slice(0, 25);
 
   const headersTop20 = ['#', 'Artista', 'Álbum', 'Media', '3rd EYE SCORE'];
 
@@ -844,7 +844,7 @@ function main(workbook: ExcelScript.Workbook) {
 
   const top20TituloRange = sheet.getRangeByIndexes(top20StartRow, columnaRanking, 1, headersTop20.length);
   top20TituloRange.merge();
-  sheet.getCell(top20StartRow, columnaRanking).setValue('TOP 20 (sin repetir artistas y sin incluir OSTs y LIVEs)');
+  sheet.getCell(top20StartRow, columnaRanking).setValue('TOP 25 (sin repetir artistas y sin incluir OSTs y LIVEs)');
   top20TituloRange.getFormat().getFont().setBold(true);
   top20TituloRange.getFormat().getFont().setSize(13);
   top20TituloRange.getFormat().getFill().setColor('#1A252F');
