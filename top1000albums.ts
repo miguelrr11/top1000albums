@@ -829,77 +829,255 @@ function main(workbook: ExcelScript.Workbook) {
     console.log(`Procesados ${artistasStats.length} artistas con múltiples álbumes.`);
   }
 
-  // =================== TOP 20 TABLE (sin repetir artistas, sin OSTs) ===================
+  // funcion que hace tablas top de artistas
+  function renderRankingTable(
+    sheet: ExcelScript.Worksheet,
+    ranking: AlbumInfo[], // ya filtrado, ordenado y recortado
+    titulo: string,
+    startRow: number,
+    startCol: number,
+    getRankingColor: (pos: number) => string,
+    getColorForScore: (score: number) => string,
+  ): void {
+    const headers = ['#', 'Artista', 'Álbum', 'Media', '3rd EYE SCORE'];
+    const numCols = headers.length;
 
-  const top20SinRepetir = albums
-    .filter(album => !album.album.includes("[OST]") && !album.album.includes("[LIVE]"))
-    .filter((album, index, eligible) => index === eligible.findIndex(a => a.artista === album.artista))
-    .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
-    .slice(0, 25);
+    // Título
+    const tituloRange = sheet.getRangeByIndexes(startRow, startCol, 1, numCols);
+    tituloRange.merge();
+    sheet.getCell(startRow, startCol).setValue(titulo);
+    tituloRange.getFormat().getFont().setBold(true);
+    tituloRange.getFormat().getFont().setSize(13);
+    tituloRange.getFormat().getFill().setColor('#1A252F');
+    tituloRange.getFormat().getFont().setColor('#FFFFFF');
+    tituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
-  const headersTop20 = ['#', 'Artista', 'Álbum', 'Media', '3rd EYE SCORE'];
+    // Cabeceras
+    const headerRange = sheet.getRangeByIndexes(startRow + 1, startCol, 1, numCols);
+    headerRange.setValues([headers]);
+    headerRange.getFormat().getFont().setBold(true);
+    headerRange.getFormat().getFill().setColor('#2C3E50');
+    headerRange.getFormat().getFont().setColor('#FFFFFF');
+    headerRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    // Datos
+    const dataRows: (string | number)[][] = ranking.map((album, index) => [
+      index + 1,
+      album.artista,
+      album.album,
+      album.media,
+      album.thirdEyeScore,
+    ]);
+
+    if (dataRows.length === 0) return;
+
+    const dataStartRow = startRow + 2;
+
+    sheet.getRangeByIndexes(dataStartRow, startCol, dataRows.length, numCols)
+      .setValues(dataRows);
+
+    // Columna # (negrita, centrada)
+    const colNumero = sheet.getRangeByIndexes(dataStartRow, startCol, dataRows.length, 1);
+    colNumero.getFormat().getFont().setBold(true);
+    colNumero.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    // Columna 3rd EYE SCORE (índice 4)
+    const colScore = sheet.getRangeByIndexes(dataStartRow, startCol + 4, dataRows.length, 1);
+    colScore.getFormat().getFont().setBold(true);
+    colScore.getFormat().getFont().setColor('#000000');
+    colScore.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    // Columna Media (índice 3)
+    sheet.getRangeByIndexes(dataStartRow, startCol + 3, dataRows.length, 1)
+      .getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    // Filas alternadas (de la columna 1 a la 3, dejando # y score con su color propio)
+    for (let i = 0; i < ranking.length; i++) {
+      sheet.getRangeByIndexes(dataStartRow + i, startCol + 1, 1, numCols - 2)
+        .getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
+    }
+
+    // Colores por posición y por score
+    for (let i = 0; i < ranking.length; i++) {
+      const row = dataStartRow + i;
+      sheet.getCell(row, startCol).getFormat().getFill().setColor(getRankingColor(i + 1));
+      sheet.getCell(row, startCol + 4).getFormat().getFill()
+        .setColor(getColorForScore(ranking[i].thirdEyeScore));
+    }
+
+    sheet.getRangeByIndexes(startRow, startCol, ranking.length + 2, numCols + 1)
+      .getFormat().autofitColumns();
+  }
 
   const top20StartRow: number = startRow + albums.length + 3 +
     (artistasRepetidos.length > 0 ? artistasStats.length + 3 : 0);
 
-  const top20TituloRange = sheet.getRangeByIndexes(top20StartRow, columnaRanking, 1, headersTop20.length);
-  top20TituloRange.merge();
-  sheet.getCell(top20StartRow, columnaRanking).setValue('TOP 25 (sin repetir artistas y sin incluir OSTs y LIVEs)');
-  top20TituloRange.getFormat().getFont().setBold(true);
-  top20TituloRange.getFormat().getFont().setSize(13);
-  top20TituloRange.getFormat().getFill().setColor('#1A252F');
-  top20TituloRange.getFormat().getFont().setColor('#FFFFFF');
-  top20TituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  const nRows: number = 25;
 
-  const top20HeaderRange = sheet.getRangeByIndexes(top20StartRow + 1, columnaRanking, 1, headersTop20.length);
-  top20HeaderRange.setValues([headersTop20]);
-  top20HeaderRange.getFormat().getFont().setBold(true);
-  top20HeaderRange.getFormat().getFill().setColor('#2C3E50');
-  top20HeaderRange.getFormat().getFont().setColor('#FFFFFF');
-  top20HeaderRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  // Tabla 1: top 25 sin repetir artistas y sin OST/LIVE
+  const rankingSinRepetir: AlbumInfo[] = albums
+    .filter(a => !a.album.includes("[OST]") && !a.album.includes("[LIVE]"))
+    .filter((album, index, arr) => index === arr.findIndex(a => a.artista === album.artista))
+    .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
+    .slice(0, nRows);
 
-  const top20DataRows: (string | number)[][] = top20SinRepetir.map((album, index) => [
-    index + 1,
-    album.artista,
-    album.album,
-    album.media,
-    album.thirdEyeScore,
-  ]);
+  renderRankingTable(
+    sheet,
+    rankingSinRepetir,
+    'TOP 25 (sin repetir artistas y sin incluir OSTs y LIVEs)',
+    top20StartRow,
+    columnaRanking,
+    getRankingColor,
+    getColorForScore,
+  );
 
-  if (top20DataRows.length > 0) {
-    sheet.getRangeByIndexes(top20StartRow + 2, columnaRanking, top20DataRows.length, headersTop20.length)
-      .setValues(top20DataRows);
+  // Tabla 2: top 25 sin filtros, justo debajo
+  const rankingSinReglas: AlbumInfo[] = albums
+    .slice() // copia para no mutar el original al ordenar
+    .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
+    .slice(0, nRows);
 
-    sheet.getRangeByIndexes(top20StartRow + 2, columnaRanking, top20DataRows.length, 1)
-      .getFormat().getFont().setBold(true);
-    sheet.getRangeByIndexes(top20StartRow + 2, columnaRanking, top20DataRows.length, 1)
-      .getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  renderRankingTable(
+    sheet,
+    rankingSinReglas,
+    'TOP 25 (sin reglas)',
+    top20StartRow + nRows + 3,
+    columnaRanking,
+    getRankingColor,
+    getColorForScore,
+);
 
-    // 3rd EYE SCORE column (index 4 in headersTop20)
-    const top20ThirdEyeCol = sheet.getRangeByIndexes(top20StartRow + 2, columnaRanking + 4, top20DataRows.length, 1);
-    top20ThirdEyeCol.getFormat().getFont().setBold(true);
-    top20ThirdEyeCol.getFormat().getFont().setColor('#000000');
-    top20ThirdEyeCol.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  function renderTablasPorGenero(
+    sheet: ExcelScript.Worksheet,
+    albums: AlbumInfo[],
+    startRow: number,
+    startCol: number,
+    getRankingColor: (pos: number) => string,
+    getColorForScore: (score: number) => string,
+  ): number {
+    const MIN_APARICIONES = 5;
+    const TOP_N = 5;
+    const FILAS_POR_TABLA = TOP_N + 3;
+    const SEPARACION = 0;
+    const TABLAS_POR_FILA = 1;
+    const ANCHO_TABLA = 6;
 
-    // Media column (index 3)
-    sheet.getRangeByIndexes(top20StartRow + 2, columnaRanking + 3, top20DataRows.length, 1)
-      .getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
-
-    for (let i = 0; i < top20SinRepetir.length; i++) {
-      sheet.getRangeByIndexes(top20StartRow + 2 + i, columnaInicio, 1, headersTop20.length - 1)
-        .getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
+    // 1. Contar apariciones de cada género
+    const conteo: { [genero: string]: number } = {};
+    for (const album of albums) {
+      if (!album.genero) continue;
+      const generos = album.genero.split(',').map(g => g.trim()).filter(g => g.length > 0);
+      for (const g of generos) {
+        conteo[g] = (conteo[g] || 0) + 1;
+      }
     }
 
-    for (let i = 0; i < top20SinRepetir.length; i++) {
-      const row = top20StartRow + 2 + i;
-      sheet.getCell(row, columnaRanking).getFormat().getFill().setColor(getRankingColor(i + 1));
-      sheet.getCell(row, columnaRanking + 4).getFormat().getFill()
-        .setColor(getColorForScore(top20SinRepetir[i].thirdEyeScore));
+    // 2. Filtrar géneros con >= MIN_APARICIONES y ordenar por frecuencia descendente
+    const generosValidos: string[] = Object.keys(conteo)
+      .filter(g => conteo[g] >= MIN_APARICIONES)
+      .sort((a, b) => conteo[b] - conteo[a]);
+
+    // 3. Por cada género, construir el top fusionando artistas repetidos
+    let tablasRenderizadas = 0;
+    let filaActual = startRow;
+    let ultimaFilaUsada = startRow;
+
+    for (const genero of generosValidos) {
+      const candidatos: AlbumInfo[] = albums
+        .filter(a => {
+          if (!a.genero) return false;
+          const generos = a.genero.split(',').map(g => g.trim());
+          return generos.indexOf(genero) !== -1;
+        })
+        .slice()
+        .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore);
+
+      const topFusionado = construirTopFusionado(candidatos, TOP_N);
+
+      const columnaTabla = startCol + (tablasRenderizadas % TABLAS_POR_FILA) * ANCHO_TABLA;
+      const filaTabla = filaActual;
+      const generoCapitalizado = genero.split(' ')
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+      renderRankingTable(
+        sheet,
+        topFusionado,
+        `TOP  ${generoCapitalizado} (${conteo[genero]} álbumes)`,
+        filaTabla,
+        columnaTabla,
+        getRankingColor,
+        getColorForScore,
+      );
+
+      const filaFinTabla = filaTabla + FILAS_POR_TABLA - 1;
+      if (filaFinTabla > ultimaFilaUsada) ultimaFilaUsada = filaFinTabla;
+      tablasRenderizadas++;
+
+      if (tablasRenderizadas % TABLAS_POR_FILA === 0) {
+        filaActual = ultimaFilaUsada + SEPARACION + 1;
+      }
     }
 
-    sheet.getRangeByIndexes(top20StartRow, columnaRanking, top20SinRepetir.length + 2, headersTop20.length + 1)
-      .getFormat().autofitColumns();
+    return ultimaFilaUsada;
   }
+
+  /**
+   * Recorre los candidatos ya ordenados por thirdEyeScore desc y construye
+   * un top de hasta `topN` entradas. Si un artista ya está en el top, sus
+   * álbumes adicionales se fusionan en la entrada existente (álbumes
+   * concatenados, media y thirdEyeScore promediados). Como cada fusión
+   * libera un hueco, sigue avanzando hasta llenar topN entradas únicas.
+   */
+  function construirTopFusionado(candidatos: AlbumInfo[], topN: number): AlbumInfo[] {
+    const top: AlbumInfo[] = [];
+    // Mantenemos arrays paralelos con los valores originales de cada entrada
+    // fusionada para poder recalcular promedios correctamente al añadir más.
+    const mediasPorEntrada: number[][] = [];
+    const scoresPorEntrada: number[][] = [];
+
+    for (const album of candidatos) {
+      const idx = top.findIndex(a => a.artista === album.artista);
+
+      if (idx === -1) {
+        // Nuevo artista: entra como fila propia
+        if (top.length >= topN) break;
+        top.push({ ...album }); // copia para no mutar el original
+        mediasPorEntrada.push([album.media]);
+        scoresPorEntrada.push([album.thirdEyeScore]);
+      } else {
+        // Artista ya presente: fusionamos en la entrada existente
+        top[idx].album = `${top[idx].album}, ${album.album}`;
+        mediasPorEntrada[idx].push(album.media);
+        scoresPorEntrada[idx].push(album.thirdEyeScore);
+        top[idx].media = promedio(mediasPorEntrada[idx]);
+        top[idx].thirdEyeScore = promedio(scoresPorEntrada[idx]);
+        // Importante: NO incrementamos el "tamaño" del top, así que el siguiente
+        // candidato podrá llenar el hueco hasta llegar a topN entradas únicas.
+      }
+    }
+
+    return top;
+  }
+
+  function promedio(nums: number[]): number {
+    let suma = 0;
+    for (const n of nums) suma += n;
+    let media = suma / nums.length;
+    let rounded = Math.round(media * 100) / 100;
+    return rounded
+  }
+
+  const filaInicioGeneros: number = top20StartRow + nRows + 3 + nRows + 3 + 3;
+  // (la primera tabla ocupa nRows+3 filas, la segunda otras nRows+3, +3 de margen)
+
+  renderTablasPorGenero(
+    sheet,
+    albums,
+    filaInicioGeneros,
+    columnaRanking,
+    getRankingColor,
+    getColorForScore,
+  );
 
   // =================== TABLA RESUMEN: ESTADÍSTICAS GLOBALES ===================
 
