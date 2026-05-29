@@ -40,8 +40,12 @@
  */
 
 function main(workbook: ExcelScript.Workbook) {
-  const sheet = workbook.getActiveWorksheet();
-  const usedRange = sheet.getUsedRange();
+  const albumsSheet = workbook.getWorksheet('Albums'); // Hoja Albums: fuente de datos
+  const tablaAlbumsSheet = workbook.getWorksheet('Tabla Albums');
+  const tablasTopSheet = workbook.getWorksheet('Tablas TOP');
+  const resumenSheet = workbook.getWorksheet('Resumen');
+  const topCancionesSheet = workbook.getWorksheet('TOP Canciones');
+  const usedRange = albumsSheet.getUsedRange();
 
   if (!usedRange) {
     console.log("No hay datos en la hoja");
@@ -84,6 +88,14 @@ function main(workbook: ExcelScript.Workbook) {
     generos?: string[];
     yearRange: string;
     avgDuration: string;
+  }
+
+  interface CancionInfo {
+    titulo: string;
+    artista: string;
+    albumTitulo: string;
+    genero: string;
+    albumThirdEyeScore: number;
   }
 
   /**
@@ -349,6 +361,7 @@ function main(workbook: ExcelScript.Workbook) {
   const artistasMap: { [artista: string]: AlbumInfo[] } = {};
   const albums: AlbumInfo[] = [];
   const todasLasNotas: number[] = [];
+  const canciones105: CancionInfo[] = [];
   const values = usedRange.getValues();
   const numRows = values.length;
   const numCols = values[0].length;
@@ -388,6 +401,15 @@ function main(workbook: ExcelScript.Workbook) {
           if (typeof notaValue === 'number' && notaValue >= 0 && notaValue <= 10.5) {
             notas.push(notaValue);
             todasLasNotas.push(notaValue);
+            if (notaValue === 10.5) {
+              canciones105.push({
+                titulo: cancionNombre.toString(),
+                artista,
+                albumTitulo: album,
+                genero: '',
+                albumThirdEyeScore: 0,
+              });
+            }
           } else {
             interludios++;
           }
@@ -446,18 +468,19 @@ function main(workbook: ExcelScript.Workbook) {
 
   // =================== TABLE LAYOUT CONSTANTS ===================
 
-  const columnaRanking = 17; // Column R (A=0 … R=17) — the '#' column
-  const columnaInicio = 18; // Column S — data columns start here
+  const columnaRanking = 0; // Column A — the '#' column
+  const columnaInicio = 1;  // Column B — data columns start here
   const startRow = 0;
 
   // =================== PRE-CLEAR: READ HEADERS & PERSISTENT DATA ===================
   // We read headers and user-entered data BEFORE clearing the area, so the values survive re-runs.
 
-  const headerRowRange = sheet.getRangeByIndexes(startRow + 1, columnaRanking, 1, headersBase.length);
+  // Lee cabeceras de "Tabla Albums" (fila 1 = cabeceras, tras el título en fila 0)
+  const headerRowRange = tablaAlbumsSheet.getRangeByIndexes(1, 0, 1, headersBase.length);
   const currentHeaders = headerRowRange.getValues()[0];
 
-  const artistasStartRowPreClear = startRow + albums.length + 4;
-  const artistasHeaderRowRangePreClear = sheet.getRangeByIndexes(artistasStartRowPreClear, columnaRanking, 1, headersBase.length);
+  // Lee cabeceras de artistas desde "Tablas TOP" (fila 1 = cabeceras de RESUMEN ARTISTAS)
+  const artistasHeaderRowRangePreClear = tablasTopSheet.getRangeByIndexes(1, 0, 1, headersBase.length);
   const currentArtistasHeaders = artistasHeaderRowRangePreClear.getValues()[0];
 
   // Build a lookup: clean header text → column index in the current table
@@ -477,7 +500,7 @@ function main(workbook: ExcelScript.Workbook) {
   }
 
   if (artistaColIdx !== -1 && albumColIdx !== -1) {
-    const dataReadRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking, 1000, currentHeaders.length);
+    const dataReadRange = tablaAlbumsSheet.getRangeByIndexes(2, 0, 1000, currentHeaders.length);
     const dataReadValues = dataReadRange.getValues();
 
     for (let i = 0; i < dataReadValues.length; i++) {
@@ -525,10 +548,21 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
 
+  // Enriquecer canciones 10.5 con género y thirdEyeScore del álbum (disponibles tras asignar persistentes)
+  for (const cancion of canciones105) {
+    const matchingAlbum = albums.find(a => a.artista === cancion.artista && a.album === cancion.albumTitulo);
+    if (matchingAlbum) {
+      cancion.genero = matchingAlbum.genero;
+      cancion.albumThirdEyeScore = matchingAlbum.thirdEyeScore;
+    }
+  }
+
   // =================== CLEAR TABLE AREA ===================
 
-  sheet.getRangeByIndexes(startRow, columnaRanking, albums.length * 2 + 100, headersBase.length + 2 + 2)
-    .clear(ExcelScript.ClearApplyTo.all);
+  tablaAlbumsSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
+  tablasTopSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
+  resumenSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
+  topCancionesSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
 
   // =================== SORT DETECTION — MAIN ALBUMS TABLE ===================
   // Whichever header has a '*' suffix in the existing table becomes the sort column.
@@ -573,9 +607,9 @@ function main(workbook: ExcelScript.Workbook) {
   // =================== WRITE MAIN ALBUMS TABLE ===================
 
   // Title
-  const mainTituloRange = sheet.getRangeByIndexes(startRow, columnaRanking, 1, headers.length);
+  const mainTituloRange = tablaAlbumsSheet.getRangeByIndexes(startRow, columnaRanking, 1, headers.length);
   mainTituloRange.merge();
-  sheet.getCell(startRow, columnaRanking).setValue('ÁLBUMES');
+  tablaAlbumsSheet.getCell(startRow, columnaRanking).setValue('ÁLBUMES');
   mainTituloRange.getFormat().getFont().setBold(true);
   mainTituloRange.getFormat().getFont().setSize(13);
   mainTituloRange.getFormat().getFill().setColor('#1A252F');
@@ -583,7 +617,7 @@ function main(workbook: ExcelScript.Workbook) {
   mainTituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
   // Headers
-  const headerRange = sheet.getRangeByIndexes(startRow + 1, columnaRanking, 1, headers.length);
+  const headerRange = tablaAlbumsSheet.getRangeByIndexes(startRow + 1, columnaRanking, 1, headers.length);
   headerRange.setValues([headers]);
   headerRange.getFormat().getFont().setBold(true);
   headerRange.getFormat().getFill().setColor('#2C3E50');
@@ -604,17 +638,17 @@ function main(workbook: ExcelScript.Workbook) {
   if (dataRows.length > 0) {
     for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
       const col = COLUMNS[colIdx];
-      const colRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking + colIdx, dataRows.length, 1);
+      const colRange = tablaAlbumsSheet.getRangeByIndexes(startRow + 2, columnaRanking + colIdx, dataRows.length, 1);
       if (col.numberFormat) colRange.setNumberFormatLocal(col.numberFormat);
     }
 
-    sheet.getRangeByIndexes(startRow + 2, columnaRanking, dataRows.length, headers.length)
+    tablaAlbumsSheet.getRangeByIndexes(startRow + 2, columnaRanking, dataRows.length, headers.length)
       .setValues(dataRows);
 
     // Column formats derived from COLUMNS
     for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
       const col = COLUMNS[colIdx];
-      const colRange = sheet.getRangeByIndexes(startRow + 2, columnaRanking + colIdx, dataRows.length, 1);
+      const colRange = tablaAlbumsSheet.getRangeByIndexes(startRow + 2, columnaRanking + colIdx, dataRows.length, 1);
       if (col.bold) colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
@@ -624,7 +658,7 @@ function main(workbook: ExcelScript.Workbook) {
 
     // Alternating row background (skip the # column)
     for (let i = 0; i < albums.length; i++) {
-      sheet.getRangeByIndexes(startRow + 2 + i, columnaInicio, 1, headers.length - 1)
+      tablaAlbumsSheet.getRangeByIndexes(startRow + 2 + i, columnaInicio, 1, headers.length - 1)
         .getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
     }
 
@@ -633,20 +667,20 @@ function main(workbook: ExcelScript.Workbook) {
       const row = startRow + 2 + i;
 
       // # column: gold / silver / bronze / grey
-      sheet.getCell(row, columnaRanking).getFormat().getFill().setColor(getRankingColor(i + 1));
+      tablaAlbumsSheet.getCell(row, columnaRanking).getFormat().getFill().setColor(getRankingColor(i + 1));
 
       // Gradient columns (e.g. 3rd EYE SCORE)
       for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
         const col = COLUMNS[colIdx];
         if (col.colorFn) {
           const val = albums[i][col.property as keyof AlbumInfo] as number;
-          sheet.getCell(row, columnaRanking + colIdx).getFormat().getFill().setColor(col.colorFn(val));
+          tablaAlbumsSheet.getCell(row, columnaRanking + colIdx).getFormat().getFill().setColor(col.colorFn(val));
         }
       }
     }
   }
 
-  sheet.getRangeByIndexes(startRow, columnaRanking, albums.length + 2, headers.length + 1)
+  tablaAlbumsSheet.getRangeByIndexes(startRow, columnaRanking, albums.length + 2, headers.length + 1)
     .getFormat().autofitColumns();
 
   console.log(`Procesados ${albums.length} álbumes y ordenados por ${sortBy}.`);
@@ -708,7 +742,7 @@ function main(workbook: ExcelScript.Workbook) {
 
     // =================== SORT DETECTION — ARTIST TABLE ===================
 
-    const artistasStartRow = startRow + albums.length + 3;
+    const artistasStartRow = 0; // Empieza en la primera fila de "Tablas TOP"
 
     let artistasSortBy: keyof ArtistaStats = 'thirdEyeScore';
     let artistasHeaderWithAsterisk: string | null = null;
@@ -760,9 +794,9 @@ function main(workbook: ExcelScript.Workbook) {
     );
 
     // Title
-    const artistasTituloRange = sheet.getRangeByIndexes(artistasStartRow, columnaRanking, 1, artistasHeaders.length);
+    const artistasTituloRange = tablasTopSheet.getRangeByIndexes(artistasStartRow, columnaRanking, 1, artistasHeaders.length);
     artistasTituloRange.merge();
-    sheet.getCell(artistasStartRow, columnaRanking).setValue('RESUMEN ARTISTAS REPETIDOS');
+    tablasTopSheet.getCell(artistasStartRow, columnaRanking).setValue('RESUMEN ARTISTAS REPETIDOS');
     artistasTituloRange.getFormat().getFont().setBold(true);
     artistasTituloRange.getFormat().getFont().setSize(13);
     artistasTituloRange.getFormat().getFill().setColor('#1A252F');
@@ -770,7 +804,7 @@ function main(workbook: ExcelScript.Workbook) {
     artistasTituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
     // Headers
-    const artistasHeaderRange = sheet.getRangeByIndexes(artistasStartRow + 1, columnaRanking, 1, artistasHeaders.length);
+    const artistasHeaderRange = tablasTopSheet.getRangeByIndexes(artistasStartRow + 1, columnaRanking, 1, artistasHeaders.length);
     artistasHeaderRange.setValues([artistasHeaders]);
     artistasHeaderRange.getFormat().getFont().setBold(true);
     artistasHeaderRange.getFormat().getFill().setColor('#2C3E50');
@@ -788,13 +822,13 @@ function main(workbook: ExcelScript.Workbook) {
       })
     );
 
-    sheet.getRangeByIndexes(artistasStartRow + 2, columnaRanking, artistasDataRows.length, artistasHeaders.length)
+    tablasTopSheet.getRangeByIndexes(artistasStartRow + 2, columnaRanking, artistasDataRows.length, artistasHeaders.length)
       .setValues(artistasDataRows);
 
     // Column formats derived from COLUMNS
     for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
       const col = COLUMNS[colIdx];
-      const colRange = sheet.getRangeByIndexes(artistasStartRow + 2, columnaRanking + colIdx, artistasDataRows.length, 1);
+      const colRange = tablasTopSheet.getRangeByIndexes(artistasStartRow + 2, columnaRanking + colIdx, artistasDataRows.length, 1);
       if (col.bold) colRange.getFormat().getFont().setBold(true);
       if (col.colorFn) colRange.getFormat().getFont().setColor('#000000');
       if (col.align) colRange.getFormat().setHorizontalAlignment(getAlignmentEnum(col.align));
@@ -804,7 +838,7 @@ function main(workbook: ExcelScript.Workbook) {
 
     // Alternating row background (skip the # column)
     for (let i = 0; i < artistasStats.length; i++) {
-      sheet.getRangeByIndexes(artistasStartRow + 2 + i, columnaInicio, 1, artistasHeaders.length - 1)
+      tablasTopSheet.getRangeByIndexes(artistasStartRow + 2 + i, columnaInicio, 1, artistasHeaders.length - 1)
         .getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
     }
 
@@ -812,18 +846,18 @@ function main(workbook: ExcelScript.Workbook) {
     for (let i = 0; i < artistasStats.length; i++) {
       const row = artistasStartRow + 2 + i;
 
-      sheet.getCell(row, columnaRanking).getFormat().getFill().setColor(getRankingColor(i + 1));
+      tablasTopSheet.getCell(row, columnaRanking).getFormat().getFill().setColor(getRankingColor(i + 1));
 
       for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
         const col = COLUMNS[colIdx];
         if (col.colorFn) {
           const val: number = (artistasStats[i] as Record<string, number>)[col.property as string];
-          sheet.getCell(row, columnaRanking + colIdx).getFormat().getFill().setColor(col.colorFn(val));
+          tablasTopSheet.getCell(row, columnaRanking + colIdx).getFormat().getFill().setColor(col.colorFn(val));
         }
       }
     }
 
-    sheet.getRangeByIndexes(artistasStartRow, columnaRanking, artistasStats.length + 2, artistasHeaders.length + 1)
+    tablasTopSheet.getRangeByIndexes(artistasStartRow, columnaRanking, artistasStats.length + 2, artistasHeaders.length + 1)
       .getFormat().autofitColumns();
 
     console.log(`Procesados ${artistasStats.length} artistas con múltiples álbumes.`);
@@ -909,8 +943,8 @@ function main(workbook: ExcelScript.Workbook) {
       .getFormat().autofitColumns();
   }
 
-  const top20StartRow: number = startRow + albums.length + 3 +
-    (artistasRepetidos.length > 0 ? artistasStats.length + 3 : 0);
+  // En "Tablas TOP": empieza tras RESUMEN ARTISTAS (si existe) o desde el principio
+  const top20StartRow: number = artistasRepetidos.length > 0 ? artistasStats.length + 3 : 0;
 
   const nRows: number = 25;
 
@@ -922,7 +956,7 @@ function main(workbook: ExcelScript.Workbook) {
     .slice(0, nRows);
 
   renderRankingTable(
-    sheet,
+    tablasTopSheet,
     rankingSinRepetir,
     'TOP 25 (sin repetir artistas y sin incluir OSTs y LIVEs)',
     top20StartRow,
@@ -938,7 +972,7 @@ function main(workbook: ExcelScript.Workbook) {
     .slice(0, nRows);
 
   renderRankingTable(
-    sheet,
+    tablasTopSheet,
     rankingSinReglas,
     'TOP 25 (sin reglas)',
     top20StartRow + nRows + 3,
@@ -1071,7 +1105,7 @@ function main(workbook: ExcelScript.Workbook) {
   // (la primera tabla ocupa nRows+3 filas, la segunda otras nRows+3, +3 de margen)
 
   renderTablasPorGenero(
-    sheet,
+    tablasTopSheet,
     albums,
     filaInicioGeneros,
     columnaRanking,
@@ -1079,11 +1113,109 @@ function main(workbook: ExcelScript.Workbook) {
     getColorForScore,
   );
 
+  // =================== TOP CANCIONES 10.5 ===================
+
+  function renderTopCanciones(
+    sheet: ExcelScript.Worksheet,
+    canciones: CancionInfo[],
+    maxRows: number,
+    maxPerAlbum: number,
+  ): void {
+    const headers = ['#', 'Canción', 'Álbum', 'Artista', 'Género'];
+    const numColsTabla = headers.length;
+
+    // Agrupar canciones por álbum, luego recorrer álbumes ordenados por thirdEyeScore desc.
+    // Por cada álbum se añaden hasta maxPerAlbum canciones.
+    const songsByAlbum: { [key: string]: CancionInfo[] } = {};
+    for (const c of canciones) {
+      const key = `${c.artista}|${c.albumTitulo}`;
+      if (!songsByAlbum[key]) songsByAlbum[key] = [];
+      songsByAlbum[key].push(c);
+    }
+
+    const albumKeys = Object.keys(songsByAlbum)
+      .sort((a, b) => songsByAlbum[b][0].albumThirdEyeScore - songsByAlbum[a][0].albumThirdEyeScore);
+
+    const result: CancionInfo[] = [];
+
+    for (const key of albumKeys) {
+      if (result.length >= maxRows) break;
+      const songs = songsByAlbum[key];
+      const toAdd = songs.slice(0, Math.min(maxPerAlbum, maxRows - result.length));
+      for (const s of toAdd) result.push(s);
+    }
+
+    // Título
+    const titulo = `TOP ${maxRows} CANCIONES 10.5 (máx. ${maxPerAlbum} por álbum)`;
+    const tituloRange = sheet.getRangeByIndexes(0, 0, 1, numColsTabla);
+    tituloRange.merge();
+    sheet.getCell(0, 0).setValue(titulo);
+    tituloRange.getFormat().getFont().setBold(true);
+    tituloRange.getFormat().getFont().setSize(13);
+    tituloRange.getFormat().getFill().setColor('#1A252F');
+    tituloRange.getFormat().getFont().setColor('#FFFFFF');
+    tituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    // Cabeceras
+    const headerRange = sheet.getRangeByIndexes(1, 0, 1, numColsTabla);
+    headerRange.setValues([headers]);
+    headerRange.getFormat().getFont().setBold(true);
+    headerRange.getFormat().getFill().setColor('#2C3E50');
+    headerRange.getFormat().getFont().setColor('#FFFFFF');
+    headerRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    if (result.length === 0) return;
+
+    // Forzar formato texto en Canción para que nombres numéricos no se conviertan a número
+    sheet.getRangeByIndexes(2, 1, result.length, 1).setNumberFormatLocal('@');
+
+    // Forzar tambien a album
+    sheet.getRangeByIndexes(2, 2, result.length, 1).setNumberFormatLocal('@');
+
+    // Datos
+    const dataRows: (string | number)[][] = result.map((c, i) => [
+      i + 1,
+      c.titulo,
+      c.albumTitulo,
+      c.artista,
+      c.genero,
+    ]);
+
+    sheet.getRangeByIndexes(2, 0, dataRows.length, numColsTabla).setValues(dataRows);
+
+    // Columna # (negrita, centrada)
+    const colNum = sheet.getRangeByIndexes(2, 0, dataRows.length, 1);
+    colNum.getFormat().getFont().setBold(true);
+    colNum.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    // Filas alternadas (columnas 1-4, dejando # con su color propio)
+    for (let i = 0; i < result.length; i++) {
+      sheet.getRangeByIndexes(2 + i, 1, 1, numColsTabla - 1)
+        .getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
+    }
+
+    // Colores medalla en columna #
+    for (let i = 0; i < result.length; i++) {
+      sheet.getCell(2 + i, 0).getFormat().getFill().setColor(getRankingColor(i + 1));
+    }
+
+    // Columna #: autofit; columnas de texto: anchos fijos generosos; Género: autofit
+    sheet.getRangeByIndexes(0, 0, dataRows.length + 2, 1).getFormat().autofitColumns(); // #
+    sheet.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(220); // Canción
+    sheet.getRangeByIndexes(0, 2, 1, 1).getFormat().setColumnWidth(200); // Álbum
+    sheet.getRangeByIndexes(0, 3, 1, 1).getFormat().setColumnWidth(150); // Artista
+    sheet.getRangeByIndexes(0, 4, dataRows.length + 2, 1).getFormat().autofitColumns(); // Género
+
+    console.log(`TOP Canciones: ${result.length} canciones generadas.`);
+  }
+
+  renderTopCanciones(topCancionesSheet, canciones105, 100, 3); // 3 canciones máx. por álbum
+
   // =================== TABLA RESUMEN: ESTADÍSTICAS GLOBALES ===================
 
   if (todasLasNotas.length > 0 && albums.length > 0) {
-    const resumenCol = columnaRanking + headersBase.length + 2;
-    const resumenStartRow = startRow;
+    const resumenCol = 0; // Empieza en la primera columna de "Resumen"
+    const resumenStartRow = 0;
 
     const notasOrd = [...todasLasNotas].sort((a, b) => a - b);
     const n = notasOrd.length;
@@ -1370,22 +1502,22 @@ function main(workbook: ExcelScript.Workbook) {
     );
 
     // Write stats table
-    const tituloRange = sheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
+    const tituloRange = resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
     tituloRange.merge();
-    sheet.getCell(resumenStartRow, resumenCol).setValue('RESUMEN GLOBAL');
+    resumenSheet.getCell(resumenStartRow, resumenCol).setValue('RESUMEN GLOBAL');
     tituloRange.getFormat().getFont().setBold(true);
     tituloRange.getFormat().getFont().setSize(13);
     tituloRange.getFormat().getFill().setColor('#1A252F');
     tituloRange.getFormat().getFont().setColor('#FFFFFF');
     tituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
-    sheet.getRangeByIndexes(resumenStartRow + 1, resumenCol, resumenData.length, 2)
+    resumenSheet.getRangeByIndexes(resumenStartRow + 1, resumenCol, resumenData.length, 2)
       .setValues(resumenData);
 
     for (let i = 0; i < resumenData.length; i++) {
       const row = resumenStartRow + 1 + i;
       const label = resumenData[i][0]?.toString() || '';
-      const cellRange = sheet.getRangeByIndexes(row, resumenCol, 1, 2);
+      const cellRange = resumenSheet.getRangeByIndexes(row, resumenCol, 1, 2);
 
       if (label === '' && resumenData[i][1] === '') continue;
 
@@ -1396,11 +1528,11 @@ function main(workbook: ExcelScript.Workbook) {
         cellRange.getFormat().getFont().setSize(10);
       } else {
         cellRange.getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
-        sheet.getCell(row, resumenCol + 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.right);
+        resumenSheet.getCell(row, resumenCol + 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.right);
       }
     }
 
-    sheet.getRangeByIndexes(resumenStartRow, resumenCol, resumenData.length + 1, 2)
+    resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, resumenData.length + 1, 2)
       .getFormat().autofitColumns();
 
     console.log('Tabla resumen global generada.');
