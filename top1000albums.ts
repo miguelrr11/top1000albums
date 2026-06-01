@@ -45,6 +45,8 @@ function main(workbook: ExcelScript.Workbook) {
   const tablasTopSheet = workbook.getWorksheet('Tablas TOP');
   const resumenSheet = workbook.getWorksheet('Resumen');
   const topCancionesSheet = workbook.getWorksheet('TOP Canciones');
+  const mapeoGenerosSheet = workbook.getWorksheet('Mapeo Generos');
+  const topGenerosSheet = workbook.getWorksheet('TOP Generos');
   const usedRange = albumsSheet.getUsedRange();
 
   if (!usedRange) {
@@ -65,7 +67,7 @@ function main(workbook: ExcelScript.Workbook) {
     totalCanciones: number;
     interludios: number;
     fila: number;
-    genero: string;
+    subgeneros: string;
     num105: number;
     thirdEyeScore: number;
     year: number;
@@ -85,7 +87,7 @@ function main(workbook: ExcelScript.Workbook) {
     notasMayoresIgual10: number;
     totalCanciones: number;
     interludios: number;
-    generos?: string[];
+    subgeneros?: string[];
     yearRange: string;
     avgDuration: string;
   }
@@ -261,11 +263,11 @@ function main(workbook: ExcelScript.Workbook) {
       align: 'center',
     },
     {
-      header: 'Género',
-      property: 'genero',
+      header: 'Subgéneros',
+      property: 'subgeneros',
       persistent: true,
-      artistHeader: 'Géneros',
-      artistValue: (stats) => stats.generos ? stats.generos.join(', ') : '',
+      artistHeader: 'Subgéneros',
+      artistValue: (stats) => stats.subgeneros ? stats.subgeneros.join(', ') : '',
     },
     {
       header: 'Año',
@@ -362,6 +364,7 @@ function main(workbook: ExcelScript.Workbook) {
   const albums: AlbumInfo[] = [];
   const todasLasNotas: number[] = [];
   const canciones105: CancionInfo[] = [];
+  const canciones10: CancionInfo[] = [];
   const values = usedRange.getValues();
   const numRows = values.length;
   const numCols = values[0].length;
@@ -403,6 +406,14 @@ function main(workbook: ExcelScript.Workbook) {
             todasLasNotas.push(notaValue);
             if (notaValue === 10.5) {
               canciones105.push({
+                titulo: cancionNombre.toString(),
+                artista,
+                albumTitulo: album,
+                genero: '',
+                albumThirdEyeScore: 0,
+              });
+            } else if (notaValue === 10) {
+              canciones10.push({
                 titulo: cancionNombre.toString(),
                 artista,
                 albumTitulo: album,
@@ -452,7 +463,7 @@ function main(workbook: ExcelScript.Workbook) {
             totalCanciones,
             interludios,
             fila: row + 1,
-            genero: '',
+            subgeneros: '',
             num105,
             thirdEyeScore,
             year: 0,
@@ -548,11 +559,18 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
 
-  // Enriquecer canciones 10.5 con género y thirdEyeScore del álbum (disponibles tras asignar persistentes)
+  // Enriquecer canciones 10.5 y 10 con género y thirdEyeScore del álbum (disponibles tras asignar persistentes)
   for (const cancion of canciones105) {
     const matchingAlbum = albums.find(a => a.artista === cancion.artista && a.album === cancion.albumTitulo);
     if (matchingAlbum) {
-      cancion.genero = matchingAlbum.genero;
+      cancion.genero = matchingAlbum.subgeneros;
+      cancion.albumThirdEyeScore = matchingAlbum.thirdEyeScore;
+    }
+  }
+  for (const cancion of canciones10) {
+    const matchingAlbum = albums.find(a => a.artista === cancion.artista && a.album === cancion.albumTitulo);
+    if (matchingAlbum) {
+      cancion.genero = matchingAlbum.subgeneros;
       cancion.albumThirdEyeScore = matchingAlbum.thirdEyeScore;
     }
   }
@@ -563,6 +581,8 @@ function main(workbook: ExcelScript.Workbook) {
   tablasTopSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
   resumenSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
   topCancionesSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
+  topGenerosSheet?.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
+  // NOTA: "Mapeo Generos" NO se limpia: contiene el mapeo subgénero→padre que rellenas a mano.
 
   // =================== SORT DETECTION — MAIN ALBUMS TABLE ===================
   // Whichever header has a '*' suffix in the existing table becomes the sort column.
@@ -733,11 +753,11 @@ function main(workbook: ExcelScript.Workbook) {
       };
     });
 
-    // Compute unique genres per artist
+    // Compute unique subgenres per artist
     for (const artistaStat of artistasStats) {
-      const allGenres: string[] = artistasMap[artistaStat.artista]
-        .flatMap(a => a.genero.split(',').map(g => g.trim()));
-      artistaStat.generos = Array.from(new Set(allGenres.filter(g => g)));
+      const allSubgenres: string[] = artistasMap[artistaStat.artista]
+        .flatMap(a => a.subgeneros.split(',').map(g => g.trim()));
+      artistaStat.subgeneros = Array.from(new Set(allSubgenres.filter(g => g)));
     }
 
     // =================== SORT DETECTION — ARTIST TABLE ===================
@@ -996,22 +1016,22 @@ function main(workbook: ExcelScript.Workbook) {
     const TABLAS_POR_FILA = 1;
     const ANCHO_TABLA = 6;
 
-    // 1. Contar apariciones de cada género
-    const conteo: { [genero: string]: number } = {};
+    // 1. Contar apariciones de cada subgénero
+    const conteo: { [subgenero: string]: number } = {};
     for (const album of albums) {
-      if (!album.genero) continue;
-      const generos = album.genero.split(',').map(g => g.trim()).filter(g => g.length > 0);
-      for (const g of generos) {
+      if (!album.subgeneros) continue;
+      const subgeneros = album.subgeneros.split(',').map(g => g.trim()).filter(g => g.length > 0);
+      for (const g of subgeneros) {
         conteo[g] = (conteo[g] || 0) + 1;
       }
     }
 
-    // 2. Filtrar géneros con >= MIN_APARICIONES y ordenar por frecuencia descendente
+    // 2. Filtrar subgéneros con >= MIN_APARICIONES y ordenar por frecuencia descendente
     const generosValidos: string[] = Object.keys(conteo)
       .filter(g => conteo[g] >= MIN_APARICIONES)
       .sort((a, b) => conteo[b] - conteo[a]);
 
-    // 3. Por cada género, construir el top fusionando artistas repetidos
+    // 3. Por cada subgénero, construir el top fusionando artistas repetidos
     let tablasRenderizadas = 0;
     let filaActual = startRow;
     let ultimaFilaUsada = startRow;
@@ -1019,9 +1039,9 @@ function main(workbook: ExcelScript.Workbook) {
     for (const genero of generosValidos) {
       const candidatos: AlbumInfo[] = albums
         .filter(a => {
-          if (!a.genero) return false;
-          const generos = a.genero.split(',').map(g => g.trim());
-          return generos.indexOf(genero) !== -1;
+          if (!a.subgeneros) return false;
+          const subgeneros = a.subgeneros.split(',').map(g => g.trim());
+          return subgeneros.indexOf(genero) !== -1;
         })
         .slice()
         .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore);
@@ -1113,6 +1133,122 @@ function main(workbook: ExcelScript.Workbook) {
     getColorForScore,
   );
 
+  // =================== MAPEO SUBGÉNERO → GÉNERO PADRE ===================
+  // La hoja "Mapeo Generos" la rellena el usuario a mano:
+  //   Col A "Subgénero" · Col B "Género Padre" · Col C "Géneros Únicos" (la genera el script).
+  // El script: (1) lee el mapeo existente, (2) añade los subgéneros usados que falten
+  // (con padre vacío para que el usuario los complete), (3) reescribe la lista de géneros únicos.
+
+  // Todos los subgéneros realmente usados en los álbumes
+  const subgenerosUsados = new Set<string>();
+  for (const album of albums) {
+    if (!album.subgeneros) continue;
+    for (const s of album.subgeneros.split(',').map(g => g.trim()).filter(g => g)) {
+      subgenerosUsados.add(s);
+    }
+  }
+
+  // Mapa subgénero → género padre, leído de la hoja
+  const subgenreToParent: { [sub: string]: string } = {};
+
+  if (mapeoGenerosSheet) {
+    const mapeoUsed = mapeoGenerosSheet.getUsedRange();
+    const existingSubs: string[] = []; // subgéneros ya presentes en col A
+    let mapeoRowCount = 1; // nº de filas usadas (mínimo: la cabecera)
+
+    if (mapeoUsed) {
+      const mv = mapeoUsed.getValues();
+      mapeoRowCount = mv.length;
+      for (let r = 1; r < mv.length; r++) { // fila 0 = cabeceras
+        const sub = mv[r][0]?.toString().trim();
+        const parent = mv[r][1]?.toString().trim();
+        if (!sub) continue;
+        existingSubs.push(sub);
+        if (parent) subgenreToParent[sub] = parent;
+      }
+    }
+
+    // Subgéneros usados que faltan en la hoja → se añaden bajo la última fila usada, con padre vacío
+    const existingSet = new Set(existingSubs);
+    const faltantes = Array.from(subgenerosUsados).filter(s => !existingSet.has(s)).sort();
+
+    if (faltantes.length > 0) {
+      const startAppendRow = mapeoRowCount; // primera fila libre tras lo ya escrito
+      mapeoGenerosSheet.getRangeByIndexes(startAppendRow, 0, faltantes.length, 2)
+        .setValues(faltantes.map(s => [s, '']));
+      console.log(`Mapeo Generos: añadidos ${faltantes.length} subgéneros nuevos sin padre → ${faltantes.join(', ')}`);
+    }
+
+    // Aviso de subgéneros usados que aún no tienen género padre asignado
+    const sinPadre = Array.from(subgenerosUsados).filter(s => !subgenreToParent[s]).sort();
+    if (sinPadre.length > 0) {
+      console.log(`AVISO: ${sinPadre.length} subgéneros sin género padre (rellénalos en 'Mapeo Generos'): ${sinPadre.join(', ')}`);
+    }
+
+    // Col C "Géneros Únicos": géneros padre distintos (orden alfabético)
+    const padresUnicos = Array.from(new Set(Object.values(subgenreToParent))).filter(p => p).sort();
+    const filasALimpiar = mapeoRowCount + faltantes.length + 10;
+    mapeoGenerosSheet.getRangeByIndexes(1, 2, filasALimpiar, 1).clear(ExcelScript.ClearApplyTo.contents);
+    if (padresUnicos.length > 0) {
+      mapeoGenerosSheet.getRangeByIndexes(1, 2, padresUnicos.length, 1)
+        .setValues(padresUnicos.map(p => [p]));
+    }
+  } else {
+    console.log("AVISO: no existe la hoja 'Mapeo Generos'; se omiten géneros padre.");
+  }
+
+  // Devuelve los géneros padre de un álbum (sin duplicar si dos subgéneros comparten padre)
+  function getGenerosPadre(album: AlbumInfo): string[] {
+    if (!album.subgeneros) return [];
+    const parents = new Set<string>();
+    for (const sub of album.subgeneros.split(',').map(g => g.trim()).filter(g => g)) {
+      const parent = subgenreToParent[sub];
+      if (parent) parents.add(parent);
+    }
+    return Array.from(parents);
+  }
+
+  // Agrupa álbumes por género padre (cada álbum cuenta una sola vez por género)
+  const generosPadreMap: { [parent: string]: AlbumInfo[] } = {};
+  for (const album of albums) {
+    for (const parent of getGenerosPadre(album)) {
+      if (!generosPadreMap[parent]) generosPadreMap[parent] = [];
+      generosPadreMap[parent].push(album);
+    }
+  }
+
+  // =================== TOP GÉNEROS PADRE (hoja "TOP Generos") ===================
+  // Una tabla por género padre con TODOS sus álbumes (una fila por álbum), 3rd EYE SCORE desc.
+
+  if (topGenerosSheet) {
+    const parentsByCount = Object.keys(generosPadreMap)
+      .sort((a, b) => generosPadreMap[b].length - generosPadreMap[a].length);
+
+    let filaGenero = 0;
+    for (const parent of parentsByCount) {
+      const ranking = generosPadreMap[parent]
+        .slice()
+        .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore);
+
+      const parentCap = parent.split(' ')
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+      renderRankingTable(
+        topGenerosSheet,
+        ranking,
+        `TOP ${parentCap} (${ranking.length} álbumes)`,
+        filaGenero,
+        columnaRanking,
+        getRankingColor,
+        getColorForScore,
+      );
+
+      // título(1) + cabecera(1) + datos(n) + 1 fila de margen
+      filaGenero += ranking.length + 3;
+    }
+    console.log(`TOP Generos: ${parentsByCount.length} géneros padre renderizados.`);
+  }
+
   // =================== TOP CANCIONES 10.5 ===================
 
   function renderTopCanciones(
@@ -1120,8 +1256,9 @@ function main(workbook: ExcelScript.Workbook) {
     canciones: CancionInfo[],
     maxRows: number,
     maxPerAlbum: number,
+    cancionesRelleno: CancionInfo[] = [],
   ): void {
-    const headers = ['#', 'Canción', 'Álbum', 'Artista', 'Género'];
+    const headers = ['#', 'Canción', 'Álbum', 'Artista', 'Subgénero'];
     const numColsTabla = headers.length;
 
     // Agrupar canciones por álbum, luego recorrer álbumes ordenados por thirdEyeScore desc.
@@ -1145,8 +1282,34 @@ function main(workbook: ExcelScript.Workbook) {
       for (const s of toAdd) result.push(s);
     }
 
+    // Relleno con canciones 10 si no se ha llegado a maxRows
+    if (result.length < maxRows && cancionesRelleno.length > 0) {
+      const albumsYaUsados = new Set(result.map(c => `${c.artista}|${c.albumTitulo}`));
+
+      const fillerByAlbum: { [key: string]: CancionInfo[] } = {};
+      for (const c of cancionesRelleno) {
+        const key = `${c.artista}|${c.albumTitulo}`;
+        if (albumsYaUsados.has(key)) continue;
+        if (!fillerByAlbum[key]) fillerByAlbum[key] = [];
+        fillerByAlbum[key].push(c);
+      }
+
+      const fillerAlbumKeys = Object.keys(fillerByAlbum)
+        .sort((a, b) => fillerByAlbum[b][0].albumThirdEyeScore - fillerByAlbum[a][0].albumThirdEyeScore);
+
+      for (const key of fillerAlbumKeys) {
+        if (result.length >= maxRows) break;
+        const songs = fillerByAlbum[key];
+        const toAdd = songs.slice(0, Math.min(maxPerAlbum, maxRows - result.length));
+        for (const s of toAdd) result.push(s);
+      }
+    }
+
     // Título
-    const titulo = `TOP ${maxRows} CANCIONES 10.5 (máx. ${maxPerAlbum} por álbum)`;
+    const fillerCount = result.filter(c => !canciones.some(x => x.titulo === c.titulo && x.artista === c.artista && x.albumTitulo === c.albumTitulo)).length;
+    const titulo = fillerCount > 0
+      ? `TOP ${maxRows} CANCIONES 10.5 + relleno 10 · máx. ${maxPerAlbum} por álbum`
+      : `TOP ${maxRows} CANCIONES 10.5 (máx. ${maxPerAlbum} por álbum)`;
     const tituloRange = sheet.getRangeByIndexes(0, 0, 1, numColsTabla);
     tituloRange.merge();
     sheet.getCell(0, 0).setValue(titulo);
@@ -1199,17 +1362,17 @@ function main(workbook: ExcelScript.Workbook) {
       sheet.getCell(2 + i, 0).getFormat().getFill().setColor(getRankingColor(i + 1));
     }
 
-    // Columna #: autofit; columnas de texto: anchos fijos generosos; Género: autofit
+    // Columna #: autofit; columnas de texto: anchos fijos generosos; Subgénero: autofit
     sheet.getRangeByIndexes(0, 0, dataRows.length + 2, 1).getFormat().autofitColumns(); // #
     sheet.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(220); // Canción
     sheet.getRangeByIndexes(0, 2, 1, 1).getFormat().setColumnWidth(200); // Álbum
     sheet.getRangeByIndexes(0, 3, 1, 1).getFormat().setColumnWidth(150); // Artista
-    sheet.getRangeByIndexes(0, 4, dataRows.length + 2, 1).getFormat().autofitColumns(); // Género
+    sheet.getRangeByIndexes(0, 4, dataRows.length + 2, 1).getFormat().autofitColumns(); // Subgénero
 
     console.log(`TOP Canciones: ${result.length} canciones generadas.`);
   }
 
-  renderTopCanciones(topCancionesSheet, canciones105, 100, 3); // 3 canciones máx. por álbum
+  renderTopCanciones(topCancionesSheet, canciones105, 100, 1, canciones10);
 
   // =================== TABLA RESUMEN: ESTADÍSTICAS GLOBALES ===================
 
@@ -1318,46 +1481,113 @@ function main(workbook: ExcelScript.Workbook) {
       ['Más irregular (mayor desv.)', `${albumMenosConsistente.artista} - ${albumMenosConsistente.album} (σ=${albumMenosConsistente.desviacionTipica})`],
     ];
 
-    // --- Genre stats ---
-    const generoStatsMap: { [g: string]: { count: number; totalMedia: number } } = {};
-    let albumsConGenero = 0;
+    // --- Subgenre stats ---
+    const subgeneroStatsMap: { [g: string]: { count: number; totalMedia: number; totalScore: number } } = {};
+    let albumsConSubgenero = 0;
 
     for (const album of albums) {
-      if (album.genero) {
-        albumsConGenero++;
-        const generos = album.genero.split(',').map(g => g.trim()).filter(g => g);
-        for (const g of generos) {
-          if (!generoStatsMap[g]) generoStatsMap[g] = { count: 0, totalMedia: 0 };
-          generoStatsMap[g].count++;
-          generoStatsMap[g].totalMedia += album.media;
+      if (album.subgeneros) {
+        albumsConSubgenero++;
+        const subs = album.subgeneros.split(',').map(g => g.trim()).filter(g => g);
+        for (const g of subs) {
+          if (!subgeneroStatsMap[g]) subgeneroStatsMap[g] = { count: 0, totalMedia: 0, totalScore: 0 };
+          subgeneroStatsMap[g].count++;
+          subgeneroStatsMap[g].totalMedia += album.media;
+          subgeneroStatsMap[g].totalScore += album.thirdEyeScore;
         }
       }
     }
 
-    const generosUnicos = Object.keys(generoStatsMap);
-    if (generosUnicos.length > 0) {
-      const generosSorted = generosUnicos
-        .map(g => ({ nombre: g, count: generoStatsMap[g].count, media: rd(generoStatsMap[g].totalMedia / generoStatsMap[g].count) }))
+    const subgenerosUnicos = Object.keys(subgeneroStatsMap);
+    if (subgenerosUnicos.length > 0) {
+      const subSorted = subgenerosUnicos
+        .map(g => ({
+          nombre: g,
+          count: subgeneroStatsMap[g].count,
+          media: rd(subgeneroStatsMap[g].totalMedia / subgeneroStatsMap[g].count),
+          score: rd(subgeneroStatsMap[g].totalScore / subgeneroStatsMap[g].count),
+        }))
         .sort((a, b) => b.count - a.count);
 
-      const generoMasFrecuente = generosSorted[0];
-      const generosPorMedia = [...generosSorted].sort((a, b) => b.media - a.media);
-      const generoMejor = generosPorMedia[0];
-      const generoPeor = generosPorMedia[generosPorMedia.length - 1];
+      const subMasFrecuente = subSorted[0];
+      const subPorMedia = [...subSorted].sort((a, b) => b.media - a.media);
+      const subMejor = subPorMedia[0];
+      const subPeor = subPorMedia[subPorMedia.length - 1];
 
       resumenData.push(
         ['', ''],
-        ['GÉNEROS', ''],
-        ['Álbumes con género', `${albumsConGenero} de ${albums.length}`],
-        ['Géneros únicos', generosUnicos.length],
-        ['Más frecuente', `${generoMasFrecuente.nombre} (${generoMasFrecuente.count})`],
-        ['Mejor media', `${generoMejor.nombre} (${generoMejor.media})`],
-        ['Peor media', `${generoPeor.nombre} (${generoPeor.media})`],
+        ['SUBGÉNEROS', ''],
+        ['Álbumes con subgénero', `${albumsConSubgenero} de ${albums.length}`],
+        ['Subgéneros únicos', subgenerosUnicos.length],
+        ['Más frecuente', `${subMasFrecuente.nombre} (${subMasFrecuente.count})`],
+        ['Mejor media', `${subMejor.nombre} (${subMejor.media})`],
+        ['Peor media', `${subPeor.nombre} (${subPeor.media})`],
         ['', ''],
-        ['DESGLOSE POR GÉNERO', '']
+        ['DESGLOSE POR SUBGÉNERO', '']
       );
-      for (const g of generosPorMedia) {
-        resumenData.push([g.nombre, `${g.count} (${g.media})`]);
+      for (const g of subPorMedia) {
+        resumenData.push([g.nombre, `${g.count} · media ${g.media} · score ${g.score}`]);
+      }
+    }
+
+    // --- Parent genre stats ---
+    const parentNames = Object.keys(generosPadreMap);
+    if (parentNames.length > 0) {
+      // Álbumes mapeados a algún género padre (cada álbum cuenta una vez)
+      const albumsMapeados = albums.filter(a => getGenerosPadre(a).length > 0).length;
+
+      // Subgéneros distintos que cuelgan de cada género padre (según el mapeo)
+      const subsPorPadre: { [parent: string]: Set<string> } = {};
+      for (const sub of Object.keys(subgenreToParent)) {
+        const parent = subgenreToParent[sub];
+        if (!subsPorPadre[parent]) subsPorPadre[parent] = new Set<string>();
+        subsPorPadre[parent].add(sub);
+      }
+
+      const padreSorted = parentNames
+        .map(p => {
+          const lista = generosPadreMap[p];
+          const mejor = lista.reduce((best, a) => a.thirdEyeScore > best.thirdEyeScore ? a : best);
+          return {
+            nombre: p,
+            count: lista.length,
+            media: rd(lista.reduce((s, a) => s + a.media, 0) / lista.length),
+            score: rd(lista.reduce((s, a) => s + a.thirdEyeScore, 0) / lista.length),
+            nSubs: subsPorPadre[p] ? subsPorPadre[p].size : 0,
+            mejor,
+          };
+        })
+        .sort((a, b) => b.count - a.count);
+
+      const padreMasFrecuente = padreSorted[0];
+      const padrePorMedia = [...padreSorted].sort((a, b) => b.media - a.media);
+      const padrePorScore = [...padreSorted].sort((a, b) => b.score - a.score);
+      const padreMasVariado = [...padreSorted].sort((a, b) => b.nSubs - a.nSubs)[0];
+
+      resumenData.push(
+        ['', ''],
+        ['GÉNEROS PADRE', ''],
+        ['Álbumes con género padre', `${albumsMapeados} de ${albums.length}`],
+        ['Géneros padre únicos', parentNames.length],
+        ['Más frecuente', `${padreMasFrecuente.nombre} (${padreMasFrecuente.count})`],
+        ['Mejor media', `${padrePorMedia[0].nombre} (${padrePorMedia[0].media})`],
+        ['Peor media', `${padrePorMedia[padrePorMedia.length - 1].nombre} (${padrePorMedia[padrePorMedia.length - 1].media})`],
+        ['Mejor 3rd EYE SCORE', `${padrePorScore[0].nombre} (${padrePorScore[0].score})`],
+        ['Peor 3rd EYE SCORE', `${padrePorScore[padrePorScore.length - 1].nombre} (${padrePorScore[padrePorScore.length - 1].score})`],
+        ['Más variado (nº subgéneros)', `${padreMasVariado.nombre} (${padreMasVariado.nSubs})`],
+        ['', ''],
+        ['DESGLOSE POR GÉNERO PADRE', '']
+      );
+      for (const p of padrePorScore) {
+        resumenData.push([p.nombre, `${p.count} álb · ${p.nSubs} subg · media ${p.media} · score ${p.score}`]);
+      }
+
+      resumenData.push(
+        ['', ''],
+        ['MEJOR ÁLBUM POR GÉNERO PADRE', '']
+      );
+      for (const p of padrePorScore) {
+        resumenData.push([p.nombre, `${p.mejor.artista} - ${p.mejor.album} (${p.mejor.thirdEyeScore})`]);
       }
     }
 
