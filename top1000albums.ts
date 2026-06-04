@@ -65,7 +65,8 @@ function main(workbook: ExcelScript.Workbook) {
     desviacionTipica: number;
     notasMayoresIgual10: number;
     totalCanciones: number;
-    notaCanciones: number[];
+    notaCancionesFull: number[];  //no rellena inteludios
+    notaCancionesFullFull: (number | null)[]; //incluye null para interludios
     interludios: number;
     fila: number;
     subgeneros: string;
@@ -388,6 +389,7 @@ function main(workbook: ExcelScript.Workbook) {
         }
 
         const notas: number[] = [];
+        const notasFull: (number | null)[] = [];
         let totalCanciones = 0;
         let interludios = 0;
         let currentRow = row + 1;
@@ -402,6 +404,8 @@ function main(workbook: ExcelScript.Workbook) {
           }
 
           totalCanciones++;
+
+          notasFull.push(typeof notaValue === 'number' ? notaValue : null);
 
           if (typeof notaValue === 'number' && notaValue >= 0 && notaValue <= 10.5) {
             notas.push(notaValue);
@@ -463,7 +467,8 @@ function main(workbook: ExcelScript.Workbook) {
             desviacionTipica: Math.round(desviacionTipica * 100) / 100,
             notasMayoresIgual10,
             totalCanciones,
-            notaCanciones: notas,
+            notaCancionesFull: notas,
+            notaCancionesFullFull: notasFull,
             interludios,
             fila: row + 1,
             subgeneros: '',
@@ -1002,7 +1007,7 @@ function main(workbook: ExcelScript.Workbook) {
     columnaRanking,
     getRankingColor,
     getColorForScore,
-);
+  );
 
   function renderTablasPorGenero(
     sheet: ExcelScript.Worksheet,
@@ -1737,15 +1742,51 @@ function main(workbook: ExcelScript.Workbook) {
     resumenData.push(['', ''], ['MEDIA DE NOTAS POR NÚMERO DE CANCIÓN', '']);
     for (let i = 0; i < 100; i++) {
       // contar cuantos albumes tienen i canciones
-      let albumesConCancionN = albums.filter(a => a.notaCanciones.length > i).length;
-      if(albumesConCancionN < 5) break;
-      const notasCancionN = albums.map(a => a.notaCanciones[i]).filter(n => n !== undefined);
+      let albumesConCancionN = albums.filter(a => a.notaCancionesFull.length > i).length;
+      if (albumesConCancionN < 15) break;
+      const notasCancionN = albums.map(a => a.notaCancionesFull[i]).filter(n => n !== undefined);
       if (notasCancionN.length > 0) {
         const mediaN = notasCancionN.reduce((sum, n) => sum + n, 0) / notasCancionN.length;
-        console.log(`Media de notas para la canción ${i + 1}: ${mediaN.toFixed(2)} (basado en ${notasCancionN.length} álbumes)`);
-        resumenData.push([`Álbumes con al menos ${i + 1} cancion${i === 0 ? '':'es'}: ${albumesConCancionN}`, `${mediaN.toFixed(2)}`]);
+        //vamos a calcular tambien la media de las desviaciones de cada indice de cancion (media album menos nota cancion n)
+        const mediaDesvN = albums.map(a => {
+          if (a.notaCancionesFull.length > i && a.notaCancionesFull[i] !== null) {
+            const desv = a.notaCancionesFull[i] - a.media;
+            return desv;
+          }
+          return null;
+        }).filter(d => d !== null).reduce((sum, d) => sum + d!, 0) / notasCancionN.length;
+
+        resumenData.push([`Álbumes con al menos ${i + 1} cancion${i === 0 ? '' : 'es'}: ${albumesConCancionN}`, `${mediaN.toFixed(2)}, [${mediaDesvN > 0 ? '+' : ''}${mediaDesvN.toFixed(2)}]`]);
       }
     }
+
+    //vamos a hacer exactamente lo mismo pero porcentualmente en saltos de 10 en 10, asi una quinta cancion de un album de 6 canciones contaria como 83% y entraria en el grupo de "álbumes con al menos 80% de canciones"
+    resumenData.push(['', ''], ['MEDIA DE NOTAS POR PORCENTAJE DE CANCIÓN', '']);
+    for (let p = 10; p <= 100; p += 10) {
+      let albumesConCancionP = albums.filter(a => a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100)).length;
+      if (albumesConCancionP < 1) break;
+      const notasCancionP = albums.map(a => {
+        if (a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100)) {
+          const index = Math.ceil(a.totalCanciones * p / 100) - 1;
+          return a.notaCancionesFull[index];
+        }
+        return null;
+      }).filter(n => n !== null) as number[];
+      if (notasCancionP.length > 0) {
+        const mediaP = notasCancionP.reduce((sum, n) => sum + n, 0) / notasCancionP.length;
+        const mediaDesvP = albums.map(a => {
+          if (a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100) && a.notaCancionesFull[Math.ceil(a.totalCanciones * p / 100) - 1] !== null) {
+            const index = Math.ceil(a.totalCanciones * p / 100) - 1;
+            const desv = a.notaCancionesFull[index] - a.media;
+            return desv;
+          }
+          return null;
+        }).filter(d => d !== null).reduce((sum, d) => sum + d!, 0) / notasCancionP.length;
+
+        resumenData.push([`Media canciones al ${p}% del álbum`, `${mediaP.toFixed(2)}, [${mediaDesvP > 0 ? '+' : ''}${mediaDesvP.toFixed(2)}]`]);
+      }
+    }
+
 
     // Write stats table
     const tituloRange = resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
