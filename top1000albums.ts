@@ -65,6 +65,7 @@ function main(workbook: ExcelScript.Workbook) {
     desviacionTipica: number;
     notasMayoresIgual10: number;
     totalCanciones: number;
+    notaCanciones: number[];
     interludios: number;
     fila: number;
     subgeneros: string;
@@ -98,6 +99,7 @@ function main(workbook: ExcelScript.Workbook) {
     albumTitulo: string;
     genero: string;
     albumThirdEyeScore: number;
+    nota: number;
   }
 
   /**
@@ -461,6 +463,7 @@ function main(workbook: ExcelScript.Workbook) {
             desviacionTipica: Math.round(desviacionTipica * 100) / 100,
             notasMayoresIgual10,
             totalCanciones,
+            notaCanciones: notas,
             interludios,
             fila: row + 1,
             subgeneros: '',
@@ -1730,6 +1733,19 @@ function main(workbook: ExcelScript.Workbook) {
       ['Mayor correlación', `${strongestCorr[0]} (r=${strongestCorr[1]})`],
       ['Menor correlación', `${weakestCorr[0]}   (r=${weakestCorr[1]})`],
     );
+
+    resumenData.push(['', ''], ['MEDIA DE NOTAS POR NÚMERO DE CANCIÓN', '']);
+    for (let i = 0; i < 100; i++) {
+      // contar cuantos albumes tienen i canciones
+      let albumesConCancionN = albums.filter(a => a.notaCanciones.length > i).length;
+      if(albumesConCancionN < 5) break;
+      const notasCancionN = albums.map(a => a.notaCanciones[i]).filter(n => n !== undefined);
+      if (notasCancionN.length > 0) {
+        const mediaN = notasCancionN.reduce((sum, n) => sum + n, 0) / notasCancionN.length;
+        console.log(`Media de notas para la canción ${i + 1}: ${mediaN.toFixed(2)} (basado en ${notasCancionN.length} álbumes)`);
+        resumenData.push([`Álbumes con al menos ${i + 1} cancion${i === 0 ? '':'es'}: ${albumesConCancionN}`, `${mediaN.toFixed(2)}`]);
+      }
+    }
 
     // Write stats table
     const tituloRange = resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
