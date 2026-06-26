@@ -1824,4 +1824,354 @@ function main(workbook: ExcelScript.Workbook) {
 
     console.log('Tabla resumen global generada.');
   }
+
+  // =================== GRÁFICOS (hoja "Graficos") ===================
+  // Esta hoja se regenera COMPLETA en cada ejecución: se borran todos los
+  // gráficos y el contenido previo, se reescriben las tablas de datos auxiliares
+  // (en una zona alejada a la derecha) y se vuelven a crear todos los charts.
+  {
+    let graficosSheet = workbook.getWorksheet('Graficos');
+    if (!graficosSheet) graficosSheet = workbook.addWorksheet('Graficos');
+
+    // --- Limpieza total de la hoja (gráficos + datos) ---
+    for (const ch of graficosSheet.getCharts()) ch.delete();
+    graficosSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
+
+    const rd2 = (v: number) => Math.round(v * 100) / 100;
+
+    // --- Zona de datos auxiliares: muy a la derecha para no estorbar a los charts ---
+    const DATA_COL = 45; // columna ~AT
+    let dataRow = 0;
+
+    // --- Rejilla de colocación de gráficos (coordenadas absolutas en px) ---
+    const CHART_W = 480;
+    const CHART_H = 300;
+    const CHARTS_PER_ROW = 2;
+    const GAP_X = 25;
+    const GAP_Y = 25;
+    const MARGIN = 10;
+    let chartIndex = 0;
+
+    // Escribe una tabla [cabecera + filas] en la zona de datos y devuelve su rango.
+    // labelsAsText: fuerza la primera columna (etiquetas) a formato texto ANTES de escribir,
+    // para que Excel la trate como eje de categorías y no como una segunda serie numérica.
+    // Debe ser false en los scatter, donde la primera columna es la X numérica.
+    function writeBlock(
+      header: string[],
+      rows: (string | number)[][],
+      labelsAsText: boolean = true,
+    ): ExcelScript.Range | null {
+      if (rows.length === 0) return null;
+      const width = header.length;
+      const startR = dataRow;
+      if (labelsAsText) {
+        graficosSheet.getRangeByIndexes(startR, DATA_COL, rows.length + 1, 1).setNumberFormatLocal('@');
+      }
+      graficosSheet.getRangeByIndexes(startR, DATA_COL, 1, width).setValues([header]);
+      graficosSheet.getRangeByIndexes(startR + 1, DATA_COL, rows.length, width).setValues(rows);
+      const range = graficosSheet.getRangeByIndexes(startR, DATA_COL, rows.length + 1, width);
+      dataRow = startR + rows.length + 1 + 2; // hueco entre bloques
+      return range;
+    }
+
+    // Crea un gráfico a partir de un rango y lo coloca en la rejilla.
+    function makeChart(
+      type: ExcelScript.ChartType,
+      range: ExcelScript.Range | null,
+      title: string,
+      seriesBy: ExcelScript.ChartSeriesBy = ExcelScript.ChartSeriesBy.columns,
+      showLegend: boolean = false,
+    ): ExcelScript.Chart | null {
+      if (!range) return null;
+      const chart = graficosSheet.addChart(type, range, seriesBy);
+      chart.getTitle().setText(title);
+      chart.getLegend().setVisible(showLegend);
+
+      const colPos = chartIndex % CHARTS_PER_ROW;
+      const rowPos = Math.floor(chartIndex / CHARTS_PER_ROW);
+      chart.setLeft(MARGIN + colPos * (CHART_W + GAP_X));
+      chart.setTop(MARGIN + rowPos * (CHART_H + GAP_Y));
+      chart.setWidth(CHART_W);
+      chart.setHeight(CHART_H);
+      chartIndex++;
+      return chart;
+    }
+
+    // ---------- 1 & 2. Evolución temporal de reviews ----------
+    const reviewed = albums
+      .filter(a => a.dateOfReviewTimestamp > 0)
+      .sort((a, b) => a.dateOfReviewTimestamp - b.dateOfReviewTimestamp);
+
+    if (reviewed.length > 0) {
+      const monthCounts: { [k: string]: number } = {};
+      for (const a of reviewed) {
+        const d = new Date(a.dateOfReviewTimestamp);
+        const key = `${d.getUTCFullYear()}-${(d.getUTCMonth() + 1).toString().padStart(2, '0')}`;
+        monthCounts[key] = (monthCounts[key] || 0) + 1;
+      }
+      const monthKeys = Object.keys(monthCounts).sort();
+      const [fy, fm] = monthKeys[0].split('-').map(s => Number(s));
+      const [ly, lm] = monthKeys[monthKeys.length - 1].split('-').map(s => Number(s));
+
+      const mesAcum: (string | number)[][] = [];
+      const mesMensual: (string | number)[][] = [];
+      let y = fy, m = fm, cum = 0;
+      while (y < ly || (y === ly && m <= lm)) {
+        const key = `${y}-${m.toString().padStart(2, '0')}`;
+        const c = monthCounts[key] || 0;
+        cum += c;
+        mesAcum.push([key, cum]);
+        mesMensual.push([key, c]);
+        m++; if (m > 12) { m = 1; y++; }
+      }
+
+      makeChart(
+        ExcelScript.ChartType.line,
+        writeBlock(['Mes', 'Reviews acumuladas'], mesAcum),
+        `Reviews acumuladas en el tiempo (${reviewed.length} con fecha)`,
+      );
+      makeChart(
+        ExcelScript.ChartType.columnClustered,
+        writeBlock(['Mes', 'Reviews del mes'], mesMensual),
+        'Reviews por mes (ritmo de reseñas)',
+      );
+    }
+
+    // ---------- 3. Histograma de notas (todas las canciones) ----------
+    if (todasLasNotas.length > 0) {
+      const counts: number[] = new Array(22).fill(0);
+      for (const v of todasLasNotas) {
+        let idx = Math.floor(v / 0.5);
+        if (idx < 0) idx = 0; if (idx > 21) idx = 21;
+        counts[idx]++;
+      }
+      const notaBins: (string | number)[][] = [];
+      for (let i = 0; i <= 21; i++) notaBins.push([(i * 0.5).toFixed(1), counts[i]]);
+      makeChart(
+        ExcelScript.ChartType.columnClustered,
+        writeBlock(['Nota', 'Frecuencia'], notaBins),
+        `Histograma de notas (${todasLasNotas.length} canciones)`,
+      );
+    }
+
+    // ---------- 4 & 5 & 6. Por década / por año ----------
+    const albumsAno = albums.filter(a => a.year > 0);
+    if (albumsAno.length > 0) {
+      const decadaMap: { [d: string]: { count: number; score: number } } = {};
+      for (const a of albumsAno) {
+        const dec = `${Math.floor(a.year / 10) * 10}s`;
+        if (!decadaMap[dec]) decadaMap[dec] = { count: 0, score: 0 };
+        decadaMap[dec].count++;
+        decadaMap[dec].score += a.thirdEyeScore;
+      }
+      const decadas = Object.keys(decadaMap).sort();
+      makeChart(
+        ExcelScript.ChartType.columnClustered,
+        writeBlock(['Década', 'Álbumes'], decadas.map(d => [d, decadaMap[d].count])),
+        'Álbumes por década',
+      );
+      makeChart(
+        ExcelScript.ChartType.columnClustered,
+        writeBlock(['Década', '3rd EYE SCORE medio'],
+          decadas.map(d => [d, rd2(decadaMap[d].score / decadaMap[d].count)])),
+        '3rd EYE SCORE medio por década',
+      );
+
+      const yearMap: { [y: number]: number } = {};
+      for (const a of albumsAno) yearMap[a.year] = (yearMap[a.year] || 0) + 1;
+      const years = Object.keys(yearMap).map(s => Number(s)).sort((a, b) => a - b);
+      makeChart(
+        ExcelScript.ChartType.lineMarkers,
+        writeBlock(['Año', 'Álbumes'], years.map(yr => [yr.toString(), yearMap[yr]])),
+        'Álbumes por año de publicación',
+      );
+    }
+
+    // ---------- 7. Top 15 subgéneros por frecuencia ----------
+    {
+      const subCount: { [s: string]: number } = {};
+      for (const a of albums) {
+        if (!a.subgeneros) continue;
+        for (const s of a.subgeneros.split(',').map(g => g.trim()).filter(g => g)) {
+          subCount[s] = (subCount[s] || 0) + 1;
+        }
+      }
+      const topSubs = Object.keys(subCount).sort((a, b) => subCount[b] - subCount[a]).slice(0, 15);
+      // En barras horizontales Excel pinta el primero abajo: invertimos para que el mayor quede arriba.
+      const subRows = topSubs.map(s => [s, subCount[s]] as (string | number)[]).reverse();
+      makeChart(
+        ExcelScript.ChartType.barClustered,
+        writeBlock(['Subgénero', 'Álbumes'], subRows),
+        'Top 15 subgéneros más frecuentes',
+      );
+    }
+
+    // ---------- 8, 9, 10. Géneros padre ----------
+    const parents = Object.keys(generosPadreMap);
+    if (parents.length > 0) {
+      const parentData = parents.map(p => {
+        const lista = generosPadreMap[p];
+        return {
+          nombre: p,
+          count: lista.length,
+          media: rd2(lista.reduce((s, a) => s + a.media, 0) / lista.length),
+          score: rd2(lista.reduce((s, a) => s + a.thirdEyeScore, 0) / lista.length),
+        };
+      });
+
+      const porCount = [...parentData].sort((a, b) => b.count - a.count);
+      const pie = makeChart(
+        ExcelScript.ChartType.pie,
+        writeBlock(['Género padre', 'Álbumes'], porCount.map(p => [p.nombre, p.count])),
+        'Reparto de álbumes por género padre',
+        ExcelScript.ChartSeriesBy.columns,
+        true,
+      );
+      if (pie) {
+        const dl = pie.getDataLabels();
+        dl.setShowPercentage(true);
+        dl.setShowValue(false);
+      }
+
+      const porMedia = [...parentData].sort((a, b) => a.media - b.media); // asc → mayor arriba en barras
+      makeChart(
+        ExcelScript.ChartType.barClustered,
+        writeBlock(['Género padre', 'Media'], porMedia.map(p => [p.nombre, p.media])),
+        'Media de notas por género padre',
+      );
+
+      const porScore = [...parentData].sort((a, b) => a.score - b.score);
+      makeChart(
+        ExcelScript.ChartType.barClustered,
+        writeBlock(['Género padre', '3rd EYE SCORE'], porScore.map(p => [p.nombre, p.score])),
+        '3rd EYE SCORE medio por género padre',
+      );
+    }
+
+    // ---------- 11. Nº de géneros padre por álbum ----------
+    {
+      const npMap: { [n: number]: number } = {};
+      let totalParents = 0;
+      for (const a of albums) {
+        const n = getGenerosPadre(a).length;
+        npMap[n] = (npMap[n] || 0) + 1;
+        totalParents += n;
+      }
+      const mediaPadres = rd2(totalParents / albums.length);
+      const ns = Object.keys(npMap).map(s => Number(s)).sort((a, b) => a - b);
+      makeChart(
+        ExcelScript.ChartType.columnClustered,
+        writeBlock(['Géneros padre', 'Álbumes'], ns.map(n => [`${n}`, npMap[n]])),
+        `Nº de géneros padre por álbum (media ${mediaPadres})`,
+      );
+    }
+
+    // ---------- 12. Media de nota según posición de la canción ----------
+    {
+      const posRows: (string | number)[][] = [];
+      for (let i = 0; i < 100; i++) {
+        const cnt = albums.filter(a => a.notaCancionesFull.length > i).length;
+        if (cnt < 15) break;
+        const notasN = albums.map(a => a.notaCancionesFull[i]).filter(n => n !== undefined);
+        const mediaN = notasN.reduce((s, n) => s + n, 0) / notasN.length;
+        posRows.push([`${i + 1}`, rd2(mediaN)]);
+      }
+      makeChart(
+        ExcelScript.ChartType.lineMarkers,
+        writeBlock(['Nº de canción', 'Media'], posRows),
+        'Media de nota según la posición de la canción',
+      );
+    }
+
+    // ---------- 13. Media de nota según % de avance del álbum ----------
+    {
+      const pctRows: (string | number)[][] = [];
+      for (let p = 10; p <= 100; p += 10) {
+        const notasP = albums.map(a => {
+          const need = Math.ceil(a.totalCanciones * p / 100);
+          return a.notaCancionesFull.length >= need ? a.notaCancionesFull[need - 1] : null;
+        }).filter(n => n !== null) as number[];
+        if (notasP.length > 0) {
+          pctRows.push([`${p}%`, rd2(notasP.reduce((s, n) => s + n, 0) / notasP.length)]);
+        }
+      }
+      makeChart(
+        ExcelScript.ChartType.lineMarkers,
+        writeBlock(['% del álbum', 'Media'], pctRows),
+        'Media de nota según el % de avance del álbum',
+      );
+    }
+
+    // ---------- 14. Histograma de 3rd EYE SCORE (álbumes) ----------
+    function histograma(valores: number[], header: string, titulo: string): void {
+      if (valores.length === 0) return;
+      const sMin = Math.floor(Math.min(...valores) / 0.5) * 0.5;
+      const sMax = Math.ceil(Math.max(...valores) / 0.5) * 0.5;
+      const nb = Math.round((sMax - sMin) / 0.5) + 1;
+      const sCounts: number[] = new Array(nb).fill(0);
+      for (const v of valores) {
+        let idx = Math.round((Math.floor(v / 0.5) * 0.5 - sMin) / 0.5);
+        if (idx < 0) idx = 0; if (idx >= nb) idx = nb - 1;
+        sCounts[idx]++;
+      }
+      const bins: (string | number)[][] = [];
+      for (let i = 0; i < nb; i++) bins.push([(sMin + i * 0.5).toFixed(1), sCounts[i]]);
+      makeChart(ExcelScript.ChartType.columnClustered, writeBlock([header, 'Álbumes'], bins), titulo);
+    }
+    histograma(albums.map(a => a.thirdEyeScore), '3rd EYE SCORE', 'Distribución de 3rd EYE SCORE (álbumes)');
+    histograma(albums.map(a => a.media), 'Media', 'Distribución de la media por álbum');
+
+    // ---------- 16-19. Dispersiones contra el 3rd EYE SCORE ----------
+    function scatter(puntos: [number, number][], headerX: string, titulo: string): void {
+      const rows = puntos.map(p => [p[0], p[1]] as (string | number)[]);
+      makeChart(ExcelScript.ChartType.xyscatter, writeBlock([headerX, '3rd EYE SCORE'], rows, false), titulo);
+    }
+    scatter(albumsAno.map(a => [a.year, a.thirdEyeScore]), 'Año', 'Año vs 3rd EYE SCORE');
+    const albumsDur = albums.filter(a => a.durationMinutes > 0);
+    scatter(albumsDur.map(a => [a.durationMinutes, a.thirdEyeScore]), 'Duración (min)', 'Duración vs 3rd EYE SCORE');
+    scatter(albums.map(a => [a.totalCanciones, a.thirdEyeScore]), 'Nº canciones', 'Nº de canciones vs 3rd EYE SCORE');
+    scatter(albums.map(a => [a.desviacionTipica, a.thirdEyeScore]), 'Desv. típica', 'Consistencia (desv. típica) vs 3rd EYE SCORE');
+
+    // ---------- 20. Top 15 álbumes por 3rd EYE SCORE ----------
+    {
+      const top15 = albums.slice().sort((a, b) => b.thirdEyeScore - a.thirdEyeScore).slice(0, 15);
+      const rows = top15.map(a => [`${a.artista} - ${a.album}`, a.thirdEyeScore] as (string | number)[]).reverse();
+      makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', '3rd EYE SCORE'], rows),
+        'Top 15 álbumes por 3rd EYE SCORE');
+    }
+
+    // ---------- 21 & 22. Artistas con varios álbumes ----------
+    {
+      const repe = Object.keys(artistasMap).filter(a => artistasMap[a].length > 1);
+      if (repe.length > 0) {
+        const porMedia = repe
+          .map(a => ({
+            art: a,
+            n: artistasMap[a].length,
+            media: rd2(artistasMap[a].reduce((s, x) => s + x.media, 0) / artistasMap[a].length),
+          }))
+          .sort((x, y) => y.media - x.media)
+          .slice(0, 15);
+        makeChart(
+          ExcelScript.ChartType.barClustered,
+          writeBlock(['Artista', 'Media'],
+            porMedia.map(r => [`${r.art} (${r.n})`, r.media] as (string | number)[]).reverse()),
+          'Top 15 artistas (≥2 álbumes) por media',
+        );
+
+        const porCount = repe
+          .map(a => ({ art: a, n: artistasMap[a].length }))
+          .sort((x, y) => y.n - x.n)
+          .slice(0, 15);
+        makeChart(
+          ExcelScript.ChartType.barClustered,
+          writeBlock(['Artista', 'Álbumes'],
+            porCount.map(r => [r.art, r.n] as (string | number)[]).reverse()),
+          'Top 15 artistas por nº de álbumes',
+        );
+      }
+    }
+
+    console.log(`Hoja "Graficos" regenerada con ${chartIndex} gráficos.`);
+  }
 }
