@@ -56,10 +56,16 @@ function main(workbook: ExcelScript.Workbook) {
 
   // =================== INTERFACES ===================
 
+  // Tipo de álbum. Un álbum es un LP normal salvo que su título lleve una etiqueta
+  // de tipo ([OST], [LIVE], [SINGLE]). Los tipos especiales se listan en algunas
+  // tablas pero NO cuentan para estadísticas, gráficos ni rankings.
+  type AlbumTipo = 'LP' | 'OST' | 'LIVE' | 'SINGLE';
+
   interface AlbumInfo {
     titulo: string;
     artista: string;
     album: string;
+    tipo: AlbumTipo;
     media: number;
     mediana: number;
     desviacionTipica: number;
@@ -192,6 +198,33 @@ function main(workbook: ExcelScript.Workbook) {
     if (align === 'center') return ExcelScript.HorizontalAlignment.center;
     if (align === 'right') return ExcelScript.HorizontalAlignment.right;
     return ExcelScript.HorizontalAlignment.left;
+  }
+
+  // =================== TIPO DE ÁLBUM ===================
+  //
+  // Un ÚNICO sitio define qué etiquetas marcan un álbum como "especial".
+  // Para añadir un tipo nuevo: añade su valor a AlbumTipo y su etiqueta aquí.
+  //   - detectarTipo(): deduce el tipo a partir del nombre del álbum.
+  //   - contabiliza():  true solo para LP → decide qué álbumes entran en
+  //                     estadísticas, gráficos y rankings. Los especiales
+  //                     (OST/LIVE/SINGLE) se listan pero no se computan.
+
+  const TIPO_TAGS: { tag: string; tipo: AlbumTipo }[] = [
+    { tag: '[OST]', tipo: 'OST' },
+    { tag: '[LIVE]', tipo: 'LIVE' },
+    { tag: '[SINGLE]', tipo: 'SINGLE' },
+  ];
+
+  function detectarTipo(album: string): AlbumTipo {
+    for (const { tag, tipo } of TIPO_TAGS) {
+      if (album.includes(tag)) return tipo;
+    }
+    return 'LP';
+  }
+
+  // ¿Este álbum cuenta para estadísticas, gráficos y rankings? Solo los LP.
+  function contabiliza(album: AlbumInfo): boolean {
+    return album.tipo === 'LP';
   }
 
   // =================== COLUMN DEFINITIONS ===================
@@ -462,6 +495,7 @@ function main(workbook: ExcelScript.Workbook) {
             titulo: tituloCompleto,
             artista,
             album,
+            tipo: detectarTipo(album),
             media: Math.round(media * 100) / 100,
             mediana: Math.round(mediana * 100) / 100,
             desviacionTipica: Math.round(desviacionTipica * 100) / 100,
@@ -976,9 +1010,9 @@ function main(workbook: ExcelScript.Workbook) {
 
   const nRows: number = 25;
 
-  // Tabla 1: top 25 sin repetir artistas y sin OST/LIVE
+  // Tabla 1: top 25 sin repetir artistas y solo LP (excluye OST/LIVE/SINGLE)
   const rankingSinRepetir: AlbumInfo[] = albums
-    .filter(a => !a.album.includes("[OST]") && !a.album.includes("[LIVE]"))
+    .filter(a => contabiliza(a))
     .filter((album, index, arr) => index === arr.findIndex(a => a.artista === album.artista))
     .sort((a, b) => b.thirdEyeScore - a.thirdEyeScore)
     .slice(0, nRows);
@@ -986,7 +1020,7 @@ function main(workbook: ExcelScript.Workbook) {
   renderRankingTable(
     tablasTopSheet,
     rankingSinRepetir,
-    'TOP 25 (sin repetir artistas y sin incluir OSTs y LIVEs)',
+    'TOP 25 (sin repetir artistas y sin incluir OSTs, LIVEs y SINGLEs)',
     top20StartRow,
     columnaRanking,
     getRankingColor,
@@ -1225,6 +1259,21 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
 
+  // =================== ÁLBUMES COMPUTABLES (solo LP) ===================
+  // Fuente única para todo lo que "cuenta": la hoja Resumen y los Gráficos usan
+  // estas versiones filtradas para que OST/LIVE/SINGLE no entren en los cálculos.
+  // (La tabla principal, los TOP por género y la "TOP 25 sin reglas" siguen
+  //  mostrando TODOS los álbumes, incluidos los especiales.)
+  const albumsComp: AlbumInfo[] = albums.filter(a => contabiliza(a));
+  const todasLasNotasComp: number[] = albumsComp.flatMap(a => a.notaCancionesFull);
+  const generosPadreMapComp: { [parent: string]: AlbumInfo[] } = {};
+  for (const album of albumsComp) {
+    for (const parent of getGenerosPadre(album)) {
+      if (!generosPadreMapComp[parent]) generosPadreMapComp[parent] = [];
+      generosPadreMapComp[parent].push(album);
+    }
+  }
+
   // =================== TOP GÉNEROS PADRE (hoja "TOP Generos") ===================
   // Una tabla por género padre con TODOS sus álbumes (una fila por álbum), 3rd EYE SCORE desc.
 
@@ -1383,7 +1432,13 @@ function main(workbook: ExcelScript.Workbook) {
   renderTopCanciones(topCancionesSheet, canciones105, 100, 1, canciones10);
 
   // =================== TABLA RESUMEN: ESTADÍSTICAS GLOBALES ===================
+  // Recibe SOLO los álbumes computables (LP): OST/LIVE/SINGLE no cuentan aquí.
 
+  function renderResumen(
+    albums: AlbumInfo[],
+    todasLasNotas: number[],
+    generosPadreMap: { [parent: string]: AlbumInfo[] },
+  ) {
   if (todasLasNotas.length > 0 && albums.length > 0) {
     const resumenCol = 0; // Empieza en la primera columna de "Resumen"
     const resumenStartRow = 0;
@@ -1824,12 +1879,19 @@ function main(workbook: ExcelScript.Workbook) {
 
     console.log('Tabla resumen global generada.');
   }
+  }
+  renderResumen(albumsComp, todasLasNotasComp, generosPadreMapComp);
 
   // =================== GRÁFICOS (hoja "Graficos") ===================
   // Esta hoja se regenera COMPLETA en cada ejecución: se borran todos los
   // gráficos y el contenido previo, se reescriben las tablas de datos auxiliares
   // (en una zona alejada a la derecha) y se vuelven a crear todos los charts.
-  {
+  // Recibe SOLO los álbumes computables (LP): OST/LIVE/SINGLE no entran en los gráficos.
+  function renderGraficos(
+    albums: AlbumInfo[],
+    todasLasNotas: number[],
+    generosPadreMap: { [parent: string]: AlbumInfo[] },
+  ) {
     let graficosSheet = workbook.getWorksheet('Graficos');
     if (!graficosSheet) graficosSheet = workbook.addWorksheet('Graficos');
 
@@ -2142,6 +2204,13 @@ function main(workbook: ExcelScript.Workbook) {
 
     // ---------- 21 & 22. Artistas con varios álbumes ----------
     {
+      // Mapa artista→álbumes reconstruido desde los álbumes computables,
+      // para que los especiales no inflen los conteos ni las medias.
+      const artistasMap: { [artista: string]: AlbumInfo[] } = {};
+      for (const a of albums) {
+        if (!artistasMap[a.artista]) artistasMap[a.artista] = [];
+        artistasMap[a.artista].push(a);
+      }
       const repe = Object.keys(artistasMap).filter(a => artistasMap[a].length > 1);
       if (repe.length > 0) {
         const porMedia = repe
@@ -2174,4 +2243,5 @@ function main(workbook: ExcelScript.Workbook) {
 
     console.log(`Hoja "Graficos" regenerada con ${chartIndex} gráficos.`);
   }
+  renderGraficos(albumsComp, todasLasNotasComp, generosPadreMapComp);
 }
