@@ -1988,6 +1988,12 @@ function main(workbook: ExcelScript.Workbook) {
 
     const rd2 = (v: number) => Math.round(v * 100) / 100;
 
+    function minutesToDisplay(m: number): string {
+      const h = Math.floor(m / 60);
+      const min = m % 60;
+      return h > 0 ? `${h}h ${min}m` : `${min}m`;
+    }
+
     // --- Zona de datos auxiliares: muy a la derecha para no estorbar a los charts ---
     const DATA_COL = 45; // columna ~AT
     let dataRow = 0;
@@ -2134,6 +2140,24 @@ function main(workbook: ExcelScript.Workbook) {
         writeBlock(['Año', 'Álbumes'], years.map(yr => [yr.toString(), yearMap[yr]])),
         'Álbumes por año de publicación',
       );
+
+      const decadaDurMap: { [d: string]: { count: number; sum: number } } = {};
+      for (const a of albumsAno) {
+        if (a.durationMinutes <= 0) continue;
+        const dec = `${Math.floor(a.year / 10) * 10}s`;
+        if (!decadaDurMap[dec]) decadaDurMap[dec] = { count: 0, sum: 0 };
+        decadaDurMap[dec].count++;
+        decadaDurMap[dec].sum += a.durationMinutes;
+      }
+      const decadasDur = Object.keys(decadaDurMap).sort();
+      if (decadasDur.length > 0) {
+        makeChart(
+          ExcelScript.ChartType.columnClustered,
+          writeBlock(['Década', 'Duración media (min)'],
+            decadasDur.map(d => [d, Math.round(decadaDurMap[d].sum / decadaDurMap[d].count)])),
+          'Duración media por década',
+        );
+      }
     }
 
     // ---------- 7. Top 15 subgéneros por frecuencia ----------
@@ -2160,11 +2184,15 @@ function main(workbook: ExcelScript.Workbook) {
     if (parents.length > 0) {
       const parentData = parents.map(p => {
         const lista = generosPadreMap[p];
+        const listaConDur = lista.filter(a => a.durationMinutes > 0);
         return {
           nombre: p,
           count: lista.length,
           media: rd2(lista.reduce((s, a) => s + a.media, 0) / lista.length),
           score: rd2(lista.reduce((s, a) => s + a.thirdEyeScore, 0) / lista.length),
+          avgDur: listaConDur.length > 0
+            ? Math.round(listaConDur.reduce((s, a) => s + a.durationMinutes, 0) / listaConDur.length)
+            : null as number | null,
         };
       });
 
@@ -2195,6 +2223,17 @@ function main(workbook: ExcelScript.Workbook) {
         writeBlock(['Género padre', '3rd EYE SCORE'], porScore.map(p => [p.nombre, p.score])),
         '3rd EYE SCORE medio por género padre',
       );
+
+      const porDuracionGenero = parentData
+        .filter((p): p is typeof p & { avgDur: number } => p.avgDur !== null)
+        .sort((a, b) => a.avgDur - b.avgDur);
+      if (porDuracionGenero.length > 0) {
+        makeChart(
+          ExcelScript.ChartType.barClustered,
+          writeBlock(['Género padre', 'Duración media (min)'], porDuracionGenero.map(p => [p.nombre, p.avgDur])),
+          'Duración media por género padre',
+        );
+      }
     }
 
     // ---------- 11. Nº de géneros padre por álbum ----------
@@ -2270,6 +2309,31 @@ function main(workbook: ExcelScript.Workbook) {
     histograma(albums.map(a => a.thirdEyeScore), '3rd EYE SCORE', 'Distribución de 3rd EYE SCORE (álbumes)');
     histograma(albums.map(a => a.media), 'Media', 'Distribución de la media por álbum');
 
+    // ---------- 15. Histograma de duración de álbumes ----------
+    {
+      const albumsConDurHist = albums.filter(a => a.durationMinutes > 0);
+      if (albumsConDurHist.length > 0) {
+        const BIN = 5; // minutos por bin
+        const durs = albumsConDurHist.map(a => a.durationMinutes);
+        const dMin = Math.floor(Math.min(...durs) / BIN) * BIN;
+        const dMax = Math.ceil(Math.max(...durs) / BIN) * BIN;
+        const nb = Math.round((dMax - dMin) / BIN) + 1;
+        const counts: number[] = new Array(nb).fill(0);
+        for (const v of durs) {
+          let idx = Math.floor((v - dMin) / BIN);
+          if (idx < 0) idx = 0; if (idx >= nb) idx = nb - 1;
+          counts[idx]++;
+        }
+        const bins: (string | number)[][] = [];
+        for (let i = 0; i < nb; i++) bins.push([`${dMin + i * BIN}`, counts[i]]);
+        makeChart(
+          ExcelScript.ChartType.columnClustered,
+          writeBlock(['Duración (min)', 'Álbumes'], bins),
+          `Distribución de la duración de los álbumes (${albumsConDurHist.length} con dato)`,
+        );
+      }
+    }
+
     // ---------- 16-19. Dispersiones contra el 3rd EYE SCORE ----------
     function scatter(puntos: [number, number][], headerX: string, titulo: string): void {
       const rows = puntos.map(p => [p[0], p[1]] as (string | number)[]);
@@ -2287,6 +2351,19 @@ function main(workbook: ExcelScript.Workbook) {
       const rows = top15.map(a => [`${a.artista} - ${a.album}`, a.thirdEyeScore] as (string | number)[]).reverse();
       makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', '3rd EYE SCORE'], rows),
         'Top 15 álbumes por 3rd EYE SCORE');
+    }
+
+    // ---------- 20b. Top 15 álbumes más largos ----------
+    {
+      const albumsConDurTop = albums.filter(a => a.durationMinutes > 0);
+      const top15Dur = albumsConDurTop.slice().sort((a, b) => b.durationMinutes - a.durationMinutes).slice(0, 15);
+      if (top15Dur.length > 0) {
+        const rows = top15Dur
+          .map(a => [`${a.artista} - ${a.album} (${minutesToDisplay(a.durationMinutes)})`, a.durationMinutes] as (string | number)[])
+          .reverse();
+        makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', 'Duración (min)'], rows),
+          'Top 15 álbumes más largos');
+      }
     }
 
     // ---------- 21 & 22. Artistas con varios álbumes ----------
@@ -2325,6 +2402,28 @@ function main(workbook: ExcelScript.Workbook) {
             porCount.map(r => [r.art, r.n] as (string | number)[]).reverse()),
           'Top 15 artistas por nº de álbumes',
         );
+
+        const porDuracionArtista = repe
+          .map(a => {
+            const withDur = artistasMap[a].filter(x => x.durationMinutes > 0);
+            return {
+              art: a,
+              avgDur: withDur.length > 0
+                ? Math.round(withDur.reduce((s, x) => s + x.durationMinutes, 0) / withDur.length)
+                : null as number | null,
+            };
+          })
+          .filter((r): r is { art: string; avgDur: number } => r.avgDur !== null)
+          .sort((x, y) => y.avgDur - x.avgDur)
+          .slice(0, 15);
+        if (porDuracionArtista.length > 0) {
+          makeChart(
+            ExcelScript.ChartType.barClustered,
+            writeBlock(['Artista', 'Duración media (min)'],
+              porDuracionArtista.map(r => [`${r.art} (${minutesToDisplay(r.avgDur)})`, r.avgDur] as (string | number)[]).reverse()),
+            'Top 15 artistas (≥2 álbumes) por duración media',
+          );
+        }
       }
     }
 
