@@ -617,6 +617,33 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
 
+  // =================== LEE AJUSTES DE "TOP Canciones" (antes de limpiar) ===================
+  // Bloque de ajustes en columnas G:H (fila 1 en adelante) de "TOP Canciones".
+  // El usuario los edita a mano; el script los lee aquí para que sobrevivan al clear().
+
+  const AJUSTES_COL = 6; // columna G
+
+  let ajustesTotalCanciones = 100;
+  let ajustesPorAlbum = 1;
+  let ajustesPorArtista = 0; // 0 = sin límite
+  let ajustesRandomizar = true;
+
+  {
+    const ajustesValues = topCancionesSheet.getRangeByIndexes(1, AJUSTES_COL, 4, 2).getValues();
+
+    const parseIntPositivo = (raw: string | number | boolean, def: number): number => {
+      const n = typeof raw === 'number' ? raw : parseInt((raw?.toString() || '').trim());
+      return (!isNaN(n) && n > 0) ? n : def;
+    };
+
+    ajustesTotalCanciones = parseIntPositivo(ajustesValues[0][1], 100);
+    ajustesPorAlbum = parseIntPositivo(ajustesValues[1][1], 1);
+    ajustesPorArtista = parseIntPositivo(ajustesValues[2][1], 0);
+
+    const rawRandomizar = ajustesValues[3][1]?.toString().trim().toUpperCase();
+    ajustesRandomizar = rawRandomizar !== 'NO'; // por defecto SI, salvo que ponga explícitamente NO
+  }
+
   // =================== CLEAR TABLE AREA ===================
 
   tablaAlbumsSheet.getUsedRange()?.clear(ExcelScript.ClearApplyTo.all);
@@ -1306,6 +1333,15 @@ function main(workbook: ExcelScript.Workbook) {
     console.log(`TOP Generos: ${parentsByCount.length} géneros padre renderizados.`);
   }
 
+  function pickRandom<T>(arr: T[], n: number): T[] {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, n);
+}
+
   // =================== TOP CANCIONES 10.5 ===================
 
   function renderTopCanciones(
@@ -1313,13 +1349,15 @@ function main(workbook: ExcelScript.Workbook) {
     canciones: CancionInfo[],
     maxRows: number,
     maxPerAlbum: number,
+    maxPerArtista: number, // 0 = sin límite
+    randomizar: boolean,
     cancionesRelleno: CancionInfo[] = [],
   ): void {
     const headers = ['#', 'Canción', 'Álbum', 'Artista', 'Subgénero'];
     const numColsTabla = headers.length;
 
     // Agrupar canciones por álbum, luego recorrer álbumes ordenados por thirdEyeScore desc.
-    // Por cada álbum se añaden hasta maxPerAlbum canciones.
+    // Por cada álbum se añaden hasta maxPerAlbum canciones, respetando el cupo por artista.
     const songsByAlbum: { [key: string]: CancionInfo[] } = {};
     for (const c of canciones) {
       const key = `${c.artista}|${c.albumTitulo}`;
@@ -1331,12 +1369,24 @@ function main(workbook: ExcelScript.Workbook) {
       .sort((a, b) => songsByAlbum[b][0].albumThirdEyeScore - songsByAlbum[a][0].albumThirdEyeScore);
 
     const result: CancionInfo[] = [];
+    const artistaCount: { [artista: string]: number } = {};
+
+    // Elige `n` canciones de `songs`: al azar si randomizar=true, si no las primeras n en orden.
+    function pickSongs(songs: CancionInfo[], n: number): CancionInfo[] {
+      if (n <= 0) return [];
+      return randomizar ? pickRandom(songs, n) : songs.slice(0, n);
+    }
 
     for (const key of albumKeys) {
       if (result.length >= maxRows) break;
       const songs = songsByAlbum[key];
-      const toAdd = songs.slice(0, Math.min(maxPerAlbum, maxRows - result.length));
+      const artista = songs[0].artista;
+      const cupoArtista = maxPerArtista > 0 ? maxPerArtista - (artistaCount[artista] || 0) : Infinity;
+      const cupo = Math.min(maxPerAlbum, maxRows - result.length, cupoArtista);
+      if (cupo <= 0) continue;
+      const toAdd = pickSongs(songs, cupo);
       for (const s of toAdd) result.push(s);
+      artistaCount[artista] = (artistaCount[artista] || 0) + toAdd.length;
     }
 
     // Relleno con canciones 10 si no se ha llegado a maxRows
@@ -1357,16 +1407,45 @@ function main(workbook: ExcelScript.Workbook) {
       for (const key of fillerAlbumKeys) {
         if (result.length >= maxRows) break;
         const songs = fillerByAlbum[key];
-        const toAdd = songs.slice(0, Math.min(maxPerAlbum, maxRows - result.length));
+        const artista = songs[0].artista;
+        const cupoArtista = maxPerArtista > 0 ? maxPerArtista - (artistaCount[artista] || 0) : Infinity;
+        const cupo = Math.min(maxPerAlbum, maxRows - result.length, cupoArtista);
+        if (cupo <= 0) continue;
+        const toAdd = pickSongs(songs, cupo);
         for (const s of toAdd) result.push(s);
+        artistaCount[artista] = (artistaCount[artista] || 0) + toAdd.length;
       }
     }
 
+    // Bloque de ajustes (columnas G:H) — se reescribe con los valores ya normalizados
+    const ajustesTituloRange = sheet.getRangeByIndexes(0, AJUSTES_COL, 1, 2);
+    ajustesTituloRange.merge();
+    sheet.getCell(0, AJUSTES_COL).setValue('AJUSTES');
+    ajustesTituloRange.getFormat().getFont().setBold(true);
+    ajustesTituloRange.getFormat().getFont().setSize(13);
+    ajustesTituloRange.getFormat().getFill().setColor('#1A252F');
+    ajustesTituloRange.getFormat().getFont().setColor('#FFFFFF');
+    ajustesTituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+    const ajustesRows: (string | number)[][] = [
+      ['Canciones totales', maxRows],
+      ['Canciones por álbum', maxPerAlbum],
+      ['Canciones por artista', maxPerArtista > 0 ? maxPerArtista : ''],
+      ['Randomizar en empate', randomizar ? 'SI' : 'NO'],
+    ];
+    const ajustesDataRange = sheet.getRangeByIndexes(1, AJUSTES_COL, ajustesRows.length, 2);
+    ajustesDataRange.setValues(ajustesRows);
+    sheet.getRangeByIndexes(1, AJUSTES_COL, ajustesRows.length, 1).getFormat().getFont().setBold(true);
+    sheet.getRangeByIndexes(1, AJUSTES_COL + 1, ajustesRows.length, 1)
+      .getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    sheet.getRangeByIndexes(0, AJUSTES_COL, ajustesRows.length + 1, 2).getFormat().autofitColumns();
+
     // Título
     const fillerCount = result.filter(c => !canciones.some(x => x.titulo === c.titulo && x.artista === c.artista && x.albumTitulo === c.albumTitulo)).length;
+    const limites = `máx. ${maxPerAlbum} por álbum${maxPerArtista > 0 ? `, máx. ${maxPerArtista} por artista` : ''}`;
     const titulo = fillerCount > 0
-      ? `TOP ${maxRows} CANCIONES 10.5 + relleno 10 · máx. ${maxPerAlbum} por álbum`
-      : `TOP ${maxRows} CANCIONES 10.5 (máx. ${maxPerAlbum} por álbum)`;
+      ? `TOP ${maxRows} CANCIONES 10.5 [${maxRows - fillerCount}] + relleno 10 [${fillerCount}] (${limites})`
+      : `TOP ${maxRows} CANCIONES 10.5 (${limites})`;
     const tituloRange = sheet.getRangeByIndexes(0, 0, 1, numColsTabla);
     tituloRange.merge();
     sheet.getCell(0, 0).setValue(titulo);
@@ -1429,7 +1508,15 @@ function main(workbook: ExcelScript.Workbook) {
     console.log(`TOP Canciones: ${result.length} canciones generadas.`);
   }
 
-  renderTopCanciones(topCancionesSheet, canciones105, 100, 1, canciones10);
+  renderTopCanciones(
+    topCancionesSheet,
+    canciones105,
+    ajustesTotalCanciones,
+    ajustesPorAlbum,
+    ajustesPorArtista,
+    ajustesRandomizar,
+    canciones10,
+  );
 
   // =================== TABLA RESUMEN: ESTADÍSTICAS GLOBALES ===================
   // Recibe SOLO los álbumes computables (LP): OST/LIVE/SINGLE no cuentan aquí.
@@ -1439,446 +1526,446 @@ function main(workbook: ExcelScript.Workbook) {
     todasLasNotas: number[],
     generosPadreMap: { [parent: string]: AlbumInfo[] },
   ) {
-  if (todasLasNotas.length > 0 && albums.length > 0) {
-    const resumenCol = 0; // Empieza en la primera columna de "Resumen"
-    const resumenStartRow = 0;
+    if (todasLasNotas.length > 0 && albums.length > 0) {
+      const resumenCol = 0; // Empieza en la primera columna de "Resumen"
+      const resumenStartRow = 0;
 
-    const notasOrd = [...todasLasNotas].sort((a, b) => a - b);
-    const n = notasOrd.length;
-    const totalCancionesGlobal = albums.reduce((s, a) => s + a.totalCanciones, 0);
-    const totalInterludiosGlobal = albums.reduce((s, a) => s + a.interludios, 0);
-    const artistasUnicos = new Set(albums.map(a => a.artista)).size;
+      const notasOrd = [...todasLasNotas].sort((a, b) => a - b);
+      const n = notasOrd.length;
+      const totalCancionesGlobal = albums.reduce((s, a) => s + a.totalCanciones, 0);
+      const totalInterludiosGlobal = albums.reduce((s, a) => s + a.interludios, 0);
+      const artistasUnicos = new Set(albums.map(a => a.artista)).size;
 
-    const mediaGlobal = todasLasNotas.reduce((s, v) => s + v, 0) / n;
+      const mediaGlobal = todasLasNotas.reduce((s, v) => s + v, 0) / n;
 
-    const medianaGlobal = n % 2 === 0
-      ? (notasOrd[n / 2 - 1] + notasOrd[n / 2]) / 2
-      : notasOrd[Math.floor(n / 2)];
+      const medianaGlobal = n % 2 === 0
+        ? (notasOrd[n / 2 - 1] + notasOrd[n / 2]) / 2
+        : notasOrd[Math.floor(n / 2)];
 
-    const varianzaGlobal = todasLasNotas.reduce((s, v) => s + Math.pow(v - mediaGlobal, 2), 0) / n;
-    const desvGlobal = Math.sqrt(varianzaGlobal);
+      const varianzaGlobal = todasLasNotas.reduce((s, v) => s + Math.pow(v - mediaGlobal, 2), 0) / n;
+      const desvGlobal = Math.sqrt(varianzaGlobal);
 
-    const coefVariacion = (desvGlobal / mediaGlobal) * 100;
+      const coefVariacion = (desvGlobal / mediaGlobal) * 100;
 
-    const q1Index = Math.floor(n * 0.25);
-    const q3Index = Math.floor(n * 0.75);
-    const q1 = notasOrd[q1Index];
-    const q3 = notasOrd[q3Index];
-    const iqr = q3 - q1;
+      const q1Index = Math.floor(n * 0.25);
+      const q3Index = Math.floor(n * 0.75);
+      const q1 = notasOrd[q1Index];
+      const q3 = notasOrd[q3Index];
+      const iqr = q3 - q1;
 
-    const skewness = todasLasNotas.reduce((s, v) => s + Math.pow((v - mediaGlobal) / desvGlobal, 3), 0) / n;
-    const kurtosis = (todasLasNotas.reduce((s, v) => s + Math.pow((v - mediaGlobal) / desvGlobal, 4), 0) / n) - 3;
+      const skewness = todasLasNotas.reduce((s, v) => s + Math.pow((v - mediaGlobal) / desvGlobal, 3), 0) / n;
+      const kurtosis = (todasLasNotas.reduce((s, v) => s + Math.pow((v - mediaGlobal) / desvGlobal, 4), 0) / n) - 3;
 
-    const notaMax = notasOrd[n - 1];
-    const notaMin = notasOrd[0];
-    const rango = notaMax - notaMin;
+      const notaMax = notasOrd[n - 1];
+      const notaMin = notasOrd[0];
+      const rango = notaMax - notaMin;
 
-    const notasGe10 = todasLasNotas.filter(v => v >= 10).length;
-    const pctGe10 = (notasGe10 / n) * 100;
-    const pctInterludios = (totalInterludiosGlobal / totalCancionesGlobal) * 100;
-    const cancionesPorAlbum = totalCancionesGlobal / albums.length;
+      const notasGe10 = todasLasNotas.filter(v => v >= 10).length;
+      const pctGe10 = (notasGe10 / n) * 100;
+      const pctInterludios = (totalInterludiosGlobal / totalCancionesGlobal) * 100;
+      const cancionesPorAlbum = totalCancionesGlobal / albums.length;
 
-    const albumsValidos = albums.filter(a => a.totalCanciones >= 2);
-    const albumMasConsistente = [...albumsValidos].sort((a, b) => a.desviacionTipica - b.desviacionTipica)[0];
-    const albumMenosConsistente = [...albumsValidos].sort((a, b) => b.desviacionTipica - a.desviacionTipica)[0];
-    const albumMejor = [...albums].sort((a, b) => b.media - a.media)[0];
-    const albumPeor = [...albums].sort((a, b) => a.media - b.media)[0];
+      const albumsValidos = albums.filter(a => a.totalCanciones >= 2);
+      const albumMasConsistente = [...albumsValidos].sort((a, b) => a.desviacionTipica - b.desviacionTipica)[0];
+      const albumMenosConsistente = [...albumsValidos].sort((a, b) => b.desviacionTipica - a.desviacionTipica)[0];
+      const albumMejor = [...albums].sort((a, b) => b.media - a.media)[0];
+      const albumPeor = [...albums].sort((a, b) => a.media - b.media)[0];
 
-    const frecuencias: { [nota: string]: number } = {};
-    for (const nota of todasLasNotas) {
-      const key = nota.toString();
-      frecuencias[key] = (frecuencias[key] || 0) + 1;
-    }
-    let moda = todasLasNotas[0];
-    let maxFreq = 0;
-    for (const [nota, freq] of Object.entries(frecuencias)) {
-      if (freq > maxFreq) { maxFreq = freq; moda = parseFloat(nota); }
-    }
-
-    const rango0a5 = todasLasNotas.filter(v => v < 5).length;
-    const rango5a7 = todasLasNotas.filter(v => v >= 5 && v < 7).length;
-    const rango7a8 = todasLasNotas.filter(v => v >= 7 && v < 8).length;
-    const rango8a9 = todasLasNotas.filter(v => v >= 8 && v < 9).length;
-    const rango9a10 = todasLasNotas.filter(v => v >= 9 && v < 10).length;
-    const rango10plus = todasLasNotas.filter(v => v >= 10).length;
-
-    const rd = (v: number) => Math.round(v * 100) / 100;
-
-    const resumenData: (string | number)[][] = [
-      ['GENERAL', ''],
-      ['Total álbumes', albums.length],
-      ['Artistas únicos', artistasUnicos],
-      ['Total canciones', totalCancionesGlobal],
-      ['Canciones con nota', n],
-      ['Interludios', totalInterludiosGlobal],
-      ['Canciones/álbum (media)', rd(cancionesPorAlbum)],
-      ['% Interludios', `${rd(pctInterludios)}%`],
-      ['', ''],
-      ['NOTAS - TENDENCIA CENTRAL', ''],
-      ['Media global', rd(mediaGlobal)],
-      ['Mediana global', rd(medianaGlobal)],
-      ['Moda (nota más frecuente)', `${moda} (×${maxFreq})`],
-      ['', ''],
-      ['NOTAS - DISPERSIÓN', ''],
-      ['Desviación típica', rd(desvGlobal)],
-      ['Coef. de variación', `${rd(coefVariacion)}%`],
-      ['Rango (máx - mín)', `${rd(rango)} (${notaMin} - ${notaMax})`],
-      ['Rango intercuartílico (Q3-Q1)', `${rd(iqr)} (${rd(q1)} - ${rd(q3)})`],
-      ['', ''],
-      ['NOTAS - FORMA DE LA DISTRIBUCIÓN', ''],
-      ['Asimetría (skewness)', `${rd(skewness)} ${skewness < -0.2 ? '← sesgo alto' : skewness > 0.2 ? '← sesgo bajo' : '← simétrica'}`],
-      ['Curtosis (excess)', `${rd(kurtosis)} ${kurtosis > 0.5 ? '← colas pesadas' : kurtosis < -0.5 ? '← muy agrupadas' : '← normal'}`],
-      ['', ''],
-      ['DISTRIBUCIÓN POR RANGOS', ''],
-      ['[0, 5)', `${rango0a5}   (${rd(rango0a5 / n * 100)}%)`],
-      ['[5, 7)', `${rango5a7}   (${rd(rango5a7 / n * 100)}%)`],
-      ['[7, 8)', `${rango7a8}   (${rd(rango7a8 / n * 100)}%)`],
-      ['[8, 9)', `${rango8a9}   (${rd(rango8a9 / n * 100)}%)`],
-      ['[9, 10)', `${rango9a10}  (${rd(rango9a10 / n * 100)}%)`],
-      ['[10, 10.5]', `${rango10plus}(${rd(pctGe10)}%)`],
-      ['', ''],
-      ['DESTACADOS', ''],
-      ['Mejor álbum', `${albumMejor.artista} - ${albumMejor.album} (${albumMejor.media})`],
-      ['Peor álbum', `${albumPeor.artista} - ${albumPeor.album} (${albumPeor.media})`],
-      ['Más consistente (menor desv.)', `${albumMasConsistente.artista} - ${albumMasConsistente.album} (σ=${albumMasConsistente.desviacionTipica})`],
-      ['Más irregular (mayor desv.)', `${albumMenosConsistente.artista} - ${albumMenosConsistente.album} (σ=${albumMenosConsistente.desviacionTipica})`],
-    ];
-
-    // --- Subgenre stats ---
-    const subgeneroStatsMap: { [g: string]: { count: number; totalMedia: number; totalScore: number } } = {};
-    let albumsConSubgenero = 0;
-
-    for (const album of albums) {
-      if (album.subgeneros) {
-        albumsConSubgenero++;
-        const subs = album.subgeneros.split(',').map(g => g.trim()).filter(g => g);
-        for (const g of subs) {
-          if (!subgeneroStatsMap[g]) subgeneroStatsMap[g] = { count: 0, totalMedia: 0, totalScore: 0 };
-          subgeneroStatsMap[g].count++;
-          subgeneroStatsMap[g].totalMedia += album.media;
-          subgeneroStatsMap[g].totalScore += album.thirdEyeScore;
-        }
+      const frecuencias: { [nota: string]: number } = {};
+      for (const nota of todasLasNotas) {
+        const key = nota.toString();
+        frecuencias[key] = (frecuencias[key] || 0) + 1;
       }
-    }
-
-    const subgenerosUnicos = Object.keys(subgeneroStatsMap);
-    if (subgenerosUnicos.length > 0) {
-      const subSorted = subgenerosUnicos
-        .map(g => ({
-          nombre: g,
-          count: subgeneroStatsMap[g].count,
-          media: rd(subgeneroStatsMap[g].totalMedia / subgeneroStatsMap[g].count),
-          score: rd(subgeneroStatsMap[g].totalScore / subgeneroStatsMap[g].count),
-        }))
-        .sort((a, b) => b.count - a.count);
-
-      const subMasFrecuente = subSorted[0];
-      const subPorMedia = [...subSorted].sort((a, b) => b.media - a.media);
-      const subMejor = subPorMedia[0];
-      const subPeor = subPorMedia[subPorMedia.length - 1];
-
-      resumenData.push(
-        ['', ''],
-        ['SUBGÉNEROS', ''],
-        ['Álbumes con subgénero', `${albumsConSubgenero} de ${albums.length}`],
-        ['Subgéneros únicos', subgenerosUnicos.length],
-        ['Más frecuente', `${subMasFrecuente.nombre} (${subMasFrecuente.count})`],
-        ['Mejor media', `${subMejor.nombre} (${subMejor.media})`],
-        ['Peor media', `${subPeor.nombre} (${subPeor.media})`],
-        ['', ''],
-        ['DESGLOSE POR SUBGÉNERO', '']
-      );
-      for (const g of subPorMedia) {
-        resumenData.push([g.nombre, `${g.count} · media ${g.media} · score ${g.score}`]);
-      }
-    }
-
-    // --- Parent genre stats ---
-    const parentNames = Object.keys(generosPadreMap);
-    if (parentNames.length > 0) {
-      // Álbumes mapeados a algún género padre (cada álbum cuenta una vez)
-      const albumsMapeados = albums.filter(a => getGenerosPadre(a).length > 0).length;
-
-      // Subgéneros distintos que cuelgan de cada género padre (según el mapeo)
-      const subsPorPadre: { [parent: string]: Set<string> } = {};
-      for (const sub of Object.keys(subgenreToParent)) {
-        const parent = subgenreToParent[sub];
-        if (!subsPorPadre[parent]) subsPorPadre[parent] = new Set<string>();
-        subsPorPadre[parent].add(sub);
+      let moda = todasLasNotas[0];
+      let maxFreq = 0;
+      for (const [nota, freq] of Object.entries(frecuencias)) {
+        if (freq > maxFreq) { maxFreq = freq; moda = parseFloat(nota); }
       }
 
-      const padreSorted = parentNames
-        .map(p => {
-          const lista = generosPadreMap[p];
-          const mejor = lista.reduce((best, a) => a.thirdEyeScore > best.thirdEyeScore ? a : best);
-          return {
-            nombre: p,
-            count: lista.length,
-            media: rd(lista.reduce((s, a) => s + a.media, 0) / lista.length),
-            score: rd(lista.reduce((s, a) => s + a.thirdEyeScore, 0) / lista.length),
-            nSubs: subsPorPadre[p] ? subsPorPadre[p].size : 0,
-            mejor,
-          };
-        })
-        .sort((a, b) => b.count - a.count);
+      const rango0a5 = todasLasNotas.filter(v => v < 5).length;
+      const rango5a7 = todasLasNotas.filter(v => v >= 5 && v < 7).length;
+      const rango7a8 = todasLasNotas.filter(v => v >= 7 && v < 8).length;
+      const rango8a9 = todasLasNotas.filter(v => v >= 8 && v < 9).length;
+      const rango9a10 = todasLasNotas.filter(v => v >= 9 && v < 10).length;
+      const rango10plus = todasLasNotas.filter(v => v >= 10).length;
 
-      const padreMasFrecuente = padreSorted[0];
-      const padrePorMedia = [...padreSorted].sort((a, b) => b.media - a.media);
-      const padrePorScore = [...padreSorted].sort((a, b) => b.score - a.score);
-      const padreMasVariado = [...padreSorted].sort((a, b) => b.nSubs - a.nSubs)[0];
+      const rd = (v: number) => Math.round(v * 100) / 100;
 
-      resumenData.push(
+      const resumenData: (string | number)[][] = [
+        ['GENERAL', ''],
+        ['Total álbumes', albums.length],
+        ['Artistas únicos', artistasUnicos],
+        ['Total canciones', totalCancionesGlobal],
+        ['Canciones con nota', n],
+        ['Interludios', totalInterludiosGlobal],
+        ['Canciones/álbum (media)', rd(cancionesPorAlbum)],
+        ['% Interludios', `${rd(pctInterludios)}%`],
         ['', ''],
-        ['GÉNEROS PADRE', ''],
-        ['Álbumes con género padre', `${albumsMapeados} de ${albums.length}`],
-        ['Géneros padre únicos', parentNames.length],
-        ['Más frecuente', `${padreMasFrecuente.nombre} (${padreMasFrecuente.count})`],
-        ['Mejor media', `${padrePorMedia[0].nombre} (${padrePorMedia[0].media})`],
-        ['Peor media', `${padrePorMedia[padrePorMedia.length - 1].nombre} (${padrePorMedia[padrePorMedia.length - 1].media})`],
-        ['Mejor 3rd EYE SCORE', `${padrePorScore[0].nombre} (${padrePorScore[0].score})`],
-        ['Peor 3rd EYE SCORE', `${padrePorScore[padrePorScore.length - 1].nombre} (${padrePorScore[padrePorScore.length - 1].score})`],
-        ['Más variado (nº subgéneros)', `${padreMasVariado.nombre} (${padreMasVariado.nSubs})`],
+        ['NOTAS - TENDENCIA CENTRAL', ''],
+        ['Media global', rd(mediaGlobal)],
+        ['Mediana global', rd(medianaGlobal)],
+        ['Moda (nota más frecuente)', `${moda} (×${maxFreq})`],
         ['', ''],
-        ['DESGLOSE POR GÉNERO PADRE', '']
-      );
-      for (const p of padrePorScore) {
-        resumenData.push([p.nombre, `${p.count} álb · ${p.nSubs} subg · media ${p.media} · score ${p.score}`]);
-      }
-
-      resumenData.push(
+        ['NOTAS - DISPERSIÓN', ''],
+        ['Desviación típica', rd(desvGlobal)],
+        ['Coef. de variación', `${rd(coefVariacion)}%`],
+        ['Rango (máx - mín)', `${rd(rango)} (${notaMin} - ${notaMax})`],
+        ['Rango intercuartílico (Q3-Q1)', `${rd(iqr)} (${rd(q1)} - ${rd(q3)})`],
         ['', ''],
-        ['MEJOR ÁLBUM POR GÉNERO PADRE', '']
-      );
-      for (const p of padrePorScore) {
-        resumenData.push([p.nombre, `${p.mejor.artista} - ${p.mejor.album} (${p.mejor.thirdEyeScore})`]);
-      }
-    }
-
-    // --- Year stats ---
-    const albumsConAno = albums.filter(a => a.year > 0);
-    if (albumsConAno.length > 0) {
-      const anos = albumsConAno.map(a => a.year);
-      const anoMin = Math.min(...anos);
-      const anoMax = Math.max(...anos);
-
-      const decadaMap: { [d: string]: { count: number; totalScore: number } } = {};
-      for (const a of albumsConAno) {
-        const decada = `${Math.floor(a.year / 10) * 10}s`;
-        if (!decadaMap[decada]) decadaMap[decada] = { count: 0, totalScore: 0 };
-        decadaMap[decada].count++;
-        decadaMap[decada].totalScore += a.thirdEyeScore;
-      }
-      const decadasSorted = Object.keys(decadaMap).sort();
-
-      const decadaTop = decadasSorted.reduce((best, d) =>
-        decadaMap[d].count > decadaMap[best].count ? d : best, decadasSorted[0]);
-      const decadaTopScore = decadasSorted.reduce((best, d) =>
-        (decadaMap[d].totalScore / decadaMap[d].count) > (decadaMap[best].totalScore / decadaMap[best].count) ? d : best, decadasSorted[0]);
-
-      resumenData.push(
+        ['NOTAS - FORMA DE LA DISTRIBUCIÓN', ''],
+        ['Asimetría (skewness)', `${rd(skewness)} ${skewness < -0.2 ? '← sesgo alto' : skewness > 0.2 ? '← sesgo bajo' : '← simétrica'}`],
+        ['Curtosis (excess)', `${rd(kurtosis)} ${kurtosis > 0.5 ? '← colas pesadas' : kurtosis < -0.5 ? '← muy agrupadas' : '← normal'}`],
         ['', ''],
-        ['AÑO', ''],
-        ['Álbumes con año', `${albumsConAno.length} de ${albums.length}`],
-        ['Año más antiguo', anoMin],
-        ['Año más reciente', anoMax],
-        ['Décadas con más álbumes', `${decadaTop} (${decadaMap[decadaTop].count})`],
-        ['Década mejor puntuada', `${decadaTopScore} (${rd(decadaMap[decadaTopScore].totalScore / decadaMap[decadaTopScore].count)})`],
+        ['DISTRIBUCIÓN POR RANGOS', ''],
+        ['[0, 5)', `${rango0a5}   (${rd(rango0a5 / n * 100)}%)`],
+        ['[5, 7)', `${rango5a7}   (${rd(rango5a7 / n * 100)}%)`],
+        ['[7, 8)', `${rango7a8}   (${rd(rango7a8 / n * 100)}%)`],
+        ['[8, 9)', `${rango8a9}   (${rd(rango8a9 / n * 100)}%)`],
+        ['[9, 10)', `${rango9a10}  (${rd(rango9a10 / n * 100)}%)`],
+        ['[10, 10.5]', `${rango10plus}(${rd(pctGe10)}%)`],
         ['', ''],
-        ['ÁLBUMES POR DÉCADA', '']
-      );
-      for (const d of decadasSorted) {
-        resumenData.push([d, `${decadaMap[d].count} álbumes · media ${rd(decadaMap[d].totalScore / decadaMap[d].count)}`]);
-      }
-    }
+        ['DESTACADOS', ''],
+        ['Mejor álbum', `${albumMejor.artista} - ${albumMejor.album} (${albumMejor.media})`],
+        ['Peor álbum', `${albumPeor.artista} - ${albumPeor.album} (${albumPeor.media})`],
+        ['Más consistente (menor desv.)', `${albumMasConsistente.artista} - ${albumMasConsistente.album} (σ=${albumMasConsistente.desviacionTipica})`],
+        ['Más irregular (mayor desv.)', `${albumMenosConsistente.artista} - ${albumMenosConsistente.album} (σ=${albumMenosConsistente.desviacionTipica})`],
+      ];
 
-    // --- Duration stats ---
-    const albumsConDur = albums.filter(a => a.durationMinutes > 0);
-    if (albumsConDur.length > 0) {
-      const durs = albumsConDur.map(a => a.durationMinutes);
-      const durMin = Math.min(...durs);
-      const durMax = Math.max(...durs);
-      const durMedia = durs.reduce((s, v) => s + v, 0) / durs.length;
+      // --- Subgenre stats ---
+      const subgeneroStatsMap: { [g: string]: { count: number; totalMedia: number; totalScore: number } } = {};
+      let albumsConSubgenero = 0;
 
-      const albumMasLargo = albumsConDur.reduce((best, a) => a.durationMinutes > best.durationMinutes ? a : best);
-      const albumMasCorto = albumsConDur.reduce((best, a) => a.durationMinutes < best.durationMinutes ? a : best);
-
-      function minutesToDisplay(m: number): string {
-        const h = Math.floor(m / 60);
-        const min = m % 60;
-        return h > 0 ? `${h}h ${min}m` : `${min}m`;
-      }
-
-      resumenData.push(
-        ['', ''],
-        ['DURACIÓN', ''],
-        ['Álbumes con duración', `${albumsConDur.length} de ${albums.length}`],
-        ['Duración media', minutesToDisplay(Math.round(durMedia))],
-        ['Más largo', `${albumMasLargo.artista} - ${albumMasLargo.album} (${minutesToDisplay(durMax)})`],
-        ['Más corto', `${albumMasCorto.artista} - ${albumMasCorto.album} (${minutesToDisplay(durMin)})`],
-      );
-    }
-
-    // --- Correlation stats ---
-    function pearsonCorr(xs: number[], ys: number[]): number {
-      const nn = xs.length;
-      if (nn < 3) return 0;
-      const mx = xs.reduce((s, v) => s + v, 0) / nn;
-      const my = ys.reduce((s, v) => s + v, 0) / nn;
-      const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
-      const dx = Math.sqrt(xs.reduce((s, v) => s + Math.pow(v - mx, 2), 0));
-      const dy = Math.sqrt(ys.reduce((s, v) => s + Math.pow(v - my, 2), 0));
-      if (dx === 0 || dy === 0) return 0;
-      return Math.round((num / (dx * dy)) * 1000) / 1000;
-    }
-
-    function corrLabel(r: number): string {
-      const abs = Math.abs(r);
-      const dir = r >= 0 ? '↑' : '↓';
-      if (abs >= 0.7) return `${dir} fuerte`;
-      if (abs >= 0.4) return `${dir} moderada`;
-      if (abs >= 0.2) return `${dir} débil`;
-      return '≈ nula';
-    }
-
-    const scores = albums.map(a => a.thirdEyeScore);
-    const corrCanciones = pearsonCorr(albums.map(a => a.totalCanciones), scores);
-    const corrInterludios = pearsonCorr(albums.map(a => a.interludios), scores);
-    const corrDesv = pearsonCorr(albums.map(a => a.desviacionTipica), scores);
-    const corrNotas10 = pearsonCorr(albums.map(a => a.notasMayoresIgual10), scores);
-
-    const albumsConAnoScores = albums.filter(a => a.year > 0);
-    const corrAno = albumsConAnoScores.length >= 3
-      ? pearsonCorr(albumsConAnoScores.map(a => a.year), albumsConAnoScores.map(a => a.thirdEyeScore))
-      : null;
-
-    const albumsConDurScores = albums.filter(a => a.durationMinutes > 0);
-    const corrDur = albumsConDurScores.length >= 3
-      ? pearsonCorr(albumsConDurScores.map(a => a.durationMinutes), albumsConDurScores.map(a => a.thirdEyeScore))
-      : null;
-
-    const corrPctInterludio = pearsonCorr(
-      albums.map(a => a.totalCanciones > 0 ? a.interludios / a.totalCanciones : 0),
-      scores
-    );
-
-    resumenData.push(
-      ['', ''],
-      ['CORRELACIONES CON 3RD EYE SCORE', ''],
-      ['(r: −1 negativa · 0 nula · +1 positiva)', ''],
-      ['Total canciones', `r=${corrCanciones}   · ${corrLabel(corrCanciones)}`],
-      ['Interludios (absoluto)', `r=${corrInterludios} · ${corrLabel(corrInterludios)}`],
-      ['% Interludios', `r=${corrPctInterludio} · ${corrLabel(corrPctInterludio)}`],
-      ['Desviación típica', `r=${corrDesv}         · ${corrLabel(corrDesv)}`],
-      ['Notas ≥10', `r=${corrNotas10}      · ${corrLabel(corrNotas10)}`],
-    );
-
-    if (corrAno !== null) resumenData.push(['Año de publicación', `r=${corrAno} · ${corrLabel(corrAno)}`]);
-    if (corrDur !== null) resumenData.push(['Duración (minutos)', `r=${corrDur} · ${corrLabel(corrDur)}`]);
-
-    const corrPairs: [string, number][] = [
-      ['Total canciones', corrCanciones],
-      ['Interludios', corrInterludios],
-      ['% Interludios', corrPctInterludio],
-      ['Desv. típica', corrDesv],
-      ['Notas ≥10', corrNotas10],
-    ];
-    if (corrAno !== null) corrPairs.push(['Año', corrAno]);
-    if (corrDur !== null) corrPairs.push(['Duración', corrDur]);
-
-    const strongestCorr = corrPairs.reduce((best, cur) => Math.abs(cur[1]) > Math.abs(best[1]) ? cur : best);
-    const weakestCorr = corrPairs.reduce((best, cur) => Math.abs(cur[1]) < Math.abs(best[1]) ? cur : best);
-
-    resumenData.push(
-      ['', ''],
-      ['Mayor correlación', `${strongestCorr[0]} (r=${strongestCorr[1]})`],
-      ['Menor correlación', `${weakestCorr[0]}   (r=${weakestCorr[1]})`],
-    );
-
-    resumenData.push(['', ''], ['MEDIA DE NOTAS POR NÚMERO DE CANCIÓN', '']);
-    for (let i = 0; i < 100; i++) {
-      // contar cuantos albumes tienen i canciones
-      let albumesConCancionN = albums.filter(a => a.notaCancionesFull.length > i).length;
-      if (albumesConCancionN < 15) break;
-      const notasCancionN = albums.map(a => a.notaCancionesFull[i]).filter(n => n !== undefined);
-      if (notasCancionN.length > 0) {
-        const mediaN = notasCancionN.reduce((sum, n) => sum + n, 0) / notasCancionN.length;
-        //vamos a calcular tambien la media de las desviaciones de cada indice de cancion (media album menos nota cancion n)
-        const mediaDesvN = albums.map(a => {
-          if (a.notaCancionesFull.length > i && a.notaCancionesFull[i] !== null) {
-            const desv = a.notaCancionesFull[i] - a.media;
-            return desv;
+      for (const album of albums) {
+        if (album.subgeneros) {
+          albumsConSubgenero++;
+          const subs = album.subgeneros.split(',').map(g => g.trim()).filter(g => g);
+          for (const g of subs) {
+            if (!subgeneroStatsMap[g]) subgeneroStatsMap[g] = { count: 0, totalMedia: 0, totalScore: 0 };
+            subgeneroStatsMap[g].count++;
+            subgeneroStatsMap[g].totalMedia += album.media;
+            subgeneroStatsMap[g].totalScore += album.thirdEyeScore;
           }
-          return null;
-        }).filter(d => d !== null).reduce((sum, d) => sum + d!, 0) / notasCancionN.length;
-
-        resumenData.push([`Álbumes con al menos ${i + 1} cancion${i === 0 ? '' : 'es'}: ${albumesConCancionN}`, `${mediaN.toFixed(2)}, [${mediaDesvN > 0 ? '+' : ''}${mediaDesvN.toFixed(2)}]`]);
-      }
-    }
-
-    //vamos a hacer exactamente lo mismo pero porcentualmente en saltos de 10 en 10, asi una quinta cancion de un album de 6 canciones contaria como 83% y entraria en el grupo de "álbumes con al menos 80% de canciones"
-    resumenData.push(['', ''], ['MEDIA DE NOTAS POR PORCENTAJE DE CANCIÓN', '']);
-    for (let p = 10; p <= 100; p += 10) {
-      let albumesConCancionP = albums.filter(a => a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100)).length;
-      if (albumesConCancionP < 1) break;
-      const notasCancionP = albums.map(a => {
-        if (a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100)) {
-          const index = Math.ceil(a.totalCanciones * p / 100) - 1;
-          return a.notaCancionesFull[index];
         }
-        return null;
-      }).filter(n => n !== null) as number[];
-      if (notasCancionP.length > 0) {
-        const mediaP = notasCancionP.reduce((sum, n) => sum + n, 0) / notasCancionP.length;
-        const mediaDesvP = albums.map(a => {
-          if (a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100) && a.notaCancionesFull[Math.ceil(a.totalCanciones * p / 100) - 1] !== null) {
+      }
+
+      const subgenerosUnicos = Object.keys(subgeneroStatsMap);
+      if (subgenerosUnicos.length > 0) {
+        const subSorted = subgenerosUnicos
+          .map(g => ({
+            nombre: g,
+            count: subgeneroStatsMap[g].count,
+            media: rd(subgeneroStatsMap[g].totalMedia / subgeneroStatsMap[g].count),
+            score: rd(subgeneroStatsMap[g].totalScore / subgeneroStatsMap[g].count),
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        const subMasFrecuente = subSorted[0];
+        const subPorMedia = [...subSorted].sort((a, b) => b.media - a.media);
+        const subMejor = subPorMedia[0];
+        const subPeor = subPorMedia[subPorMedia.length - 1];
+
+        resumenData.push(
+          ['', ''],
+          ['SUBGÉNEROS', ''],
+          ['Álbumes con subgénero', `${albumsConSubgenero} de ${albums.length}`],
+          ['Subgéneros únicos', subgenerosUnicos.length],
+          ['Más frecuente', `${subMasFrecuente.nombre} (${subMasFrecuente.count})`],
+          ['Mejor media', `${subMejor.nombre} (${subMejor.media})`],
+          ['Peor media', `${subPeor.nombre} (${subPeor.media})`],
+          ['', ''],
+          ['DESGLOSE POR SUBGÉNERO', '']
+        );
+        for (const g of subPorMedia) {
+          resumenData.push([g.nombre, `${g.count} · media ${g.media} · score ${g.score}`]);
+        }
+      }
+
+      // --- Parent genre stats ---
+      const parentNames = Object.keys(generosPadreMap);
+      if (parentNames.length > 0) {
+        // Álbumes mapeados a algún género padre (cada álbum cuenta una vez)
+        const albumsMapeados = albums.filter(a => getGenerosPadre(a).length > 0).length;
+
+        // Subgéneros distintos que cuelgan de cada género padre (según el mapeo)
+        const subsPorPadre: { [parent: string]: Set<string> } = {};
+        for (const sub of Object.keys(subgenreToParent)) {
+          const parent = subgenreToParent[sub];
+          if (!subsPorPadre[parent]) subsPorPadre[parent] = new Set<string>();
+          subsPorPadre[parent].add(sub);
+        }
+
+        const padreSorted = parentNames
+          .map(p => {
+            const lista = generosPadreMap[p];
+            const mejor = lista.reduce((best, a) => a.thirdEyeScore > best.thirdEyeScore ? a : best);
+            return {
+              nombre: p,
+              count: lista.length,
+              media: rd(lista.reduce((s, a) => s + a.media, 0) / lista.length),
+              score: rd(lista.reduce((s, a) => s + a.thirdEyeScore, 0) / lista.length),
+              nSubs: subsPorPadre[p] ? subsPorPadre[p].size : 0,
+              mejor,
+            };
+          })
+          .sort((a, b) => b.count - a.count);
+
+        const padreMasFrecuente = padreSorted[0];
+        const padrePorMedia = [...padreSorted].sort((a, b) => b.media - a.media);
+        const padrePorScore = [...padreSorted].sort((a, b) => b.score - a.score);
+        const padreMasVariado = [...padreSorted].sort((a, b) => b.nSubs - a.nSubs)[0];
+
+        resumenData.push(
+          ['', ''],
+          ['GÉNEROS PADRE', ''],
+          ['Álbumes con género padre', `${albumsMapeados} de ${albums.length}`],
+          ['Géneros padre únicos', parentNames.length],
+          ['Más frecuente', `${padreMasFrecuente.nombre} (${padreMasFrecuente.count})`],
+          ['Mejor media', `${padrePorMedia[0].nombre} (${padrePorMedia[0].media})`],
+          ['Peor media', `${padrePorMedia[padrePorMedia.length - 1].nombre} (${padrePorMedia[padrePorMedia.length - 1].media})`],
+          ['Mejor 3rd EYE SCORE', `${padrePorScore[0].nombre} (${padrePorScore[0].score})`],
+          ['Peor 3rd EYE SCORE', `${padrePorScore[padrePorScore.length - 1].nombre} (${padrePorScore[padrePorScore.length - 1].score})`],
+          ['Más variado (nº subgéneros)', `${padreMasVariado.nombre} (${padreMasVariado.nSubs})`],
+          ['', ''],
+          ['DESGLOSE POR GÉNERO PADRE', '']
+        );
+        for (const p of padrePorScore) {
+          resumenData.push([p.nombre, `${p.count} álb · ${p.nSubs} subg · media ${p.media} · score ${p.score}`]);
+        }
+
+        resumenData.push(
+          ['', ''],
+          ['MEJOR ÁLBUM POR GÉNERO PADRE', '']
+        );
+        for (const p of padrePorScore) {
+          resumenData.push([p.nombre, `${p.mejor.artista} - ${p.mejor.album} (${p.mejor.thirdEyeScore})`]);
+        }
+      }
+
+      // --- Year stats ---
+      const albumsConAno = albums.filter(a => a.year > 0);
+      if (albumsConAno.length > 0) {
+        const anos = albumsConAno.map(a => a.year);
+        const anoMin = Math.min(...anos);
+        const anoMax = Math.max(...anos);
+
+        const decadaMap: { [d: string]: { count: number; totalScore: number } } = {};
+        for (const a of albumsConAno) {
+          const decada = `${Math.floor(a.year / 10) * 10}s`;
+          if (!decadaMap[decada]) decadaMap[decada] = { count: 0, totalScore: 0 };
+          decadaMap[decada].count++;
+          decadaMap[decada].totalScore += a.thirdEyeScore;
+        }
+        const decadasSorted = Object.keys(decadaMap).sort();
+
+        const decadaTop = decadasSorted.reduce((best, d) =>
+          decadaMap[d].count > decadaMap[best].count ? d : best, decadasSorted[0]);
+        const decadaTopScore = decadasSorted.reduce((best, d) =>
+          (decadaMap[d].totalScore / decadaMap[d].count) > (decadaMap[best].totalScore / decadaMap[best].count) ? d : best, decadasSorted[0]);
+
+        resumenData.push(
+          ['', ''],
+          ['AÑO', ''],
+          ['Álbumes con año', `${albumsConAno.length} de ${albums.length}`],
+          ['Año más antiguo', anoMin],
+          ['Año más reciente', anoMax],
+          ['Décadas con más álbumes', `${decadaTop} (${decadaMap[decadaTop].count})`],
+          ['Década mejor puntuada', `${decadaTopScore} (${rd(decadaMap[decadaTopScore].totalScore / decadaMap[decadaTopScore].count)})`],
+          ['', ''],
+          ['ÁLBUMES POR DÉCADA', '']
+        );
+        for (const d of decadasSorted) {
+          resumenData.push([d, `${decadaMap[d].count} álbumes · media ${rd(decadaMap[d].totalScore / decadaMap[d].count)}`]);
+        }
+      }
+
+      // --- Duration stats ---
+      const albumsConDur = albums.filter(a => a.durationMinutes > 0);
+      if (albumsConDur.length > 0) {
+        const durs = albumsConDur.map(a => a.durationMinutes);
+        const durMin = Math.min(...durs);
+        const durMax = Math.max(...durs);
+        const durMedia = durs.reduce((s, v) => s + v, 0) / durs.length;
+
+        const albumMasLargo = albumsConDur.reduce((best, a) => a.durationMinutes > best.durationMinutes ? a : best);
+        const albumMasCorto = albumsConDur.reduce((best, a) => a.durationMinutes < best.durationMinutes ? a : best);
+
+        function minutesToDisplay(m: number): string {
+          const h = Math.floor(m / 60);
+          const min = m % 60;
+          return h > 0 ? `${h}h ${min}m` : `${min}m`;
+        }
+
+        resumenData.push(
+          ['', ''],
+          ['DURACIÓN', ''],
+          ['Álbumes con duración', `${albumsConDur.length} de ${albums.length}`],
+          ['Duración media', minutesToDisplay(Math.round(durMedia))],
+          ['Más largo', `${albumMasLargo.artista} - ${albumMasLargo.album} (${minutesToDisplay(durMax)})`],
+          ['Más corto', `${albumMasCorto.artista} - ${albumMasCorto.album} (${minutesToDisplay(durMin)})`],
+        );
+      }
+
+      // --- Correlation stats ---
+      function pearsonCorr(xs: number[], ys: number[]): number {
+        const nn = xs.length;
+        if (nn < 3) return 0;
+        const mx = xs.reduce((s, v) => s + v, 0) / nn;
+        const my = ys.reduce((s, v) => s + v, 0) / nn;
+        const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
+        const dx = Math.sqrt(xs.reduce((s, v) => s + Math.pow(v - mx, 2), 0));
+        const dy = Math.sqrt(ys.reduce((s, v) => s + Math.pow(v - my, 2), 0));
+        if (dx === 0 || dy === 0) return 0;
+        return Math.round((num / (dx * dy)) * 1000) / 1000;
+      }
+
+      function corrLabel(r: number): string {
+        const abs = Math.abs(r);
+        const dir = r >= 0 ? '↑' : '↓';
+        if (abs >= 0.7) return `${dir} fuerte`;
+        if (abs >= 0.4) return `${dir} moderada`;
+        if (abs >= 0.2) return `${dir} débil`;
+        return '≈ nula';
+      }
+
+      const scores = albums.map(a => a.thirdEyeScore);
+      const corrCanciones = pearsonCorr(albums.map(a => a.totalCanciones), scores);
+      const corrInterludios = pearsonCorr(albums.map(a => a.interludios), scores);
+      const corrDesv = pearsonCorr(albums.map(a => a.desviacionTipica), scores);
+      const corrNotas10 = pearsonCorr(albums.map(a => a.notasMayoresIgual10), scores);
+
+      const albumsConAnoScores = albums.filter(a => a.year > 0);
+      const corrAno = albumsConAnoScores.length >= 3
+        ? pearsonCorr(albumsConAnoScores.map(a => a.year), albumsConAnoScores.map(a => a.thirdEyeScore))
+        : null;
+
+      const albumsConDurScores = albums.filter(a => a.durationMinutes > 0);
+      const corrDur = albumsConDurScores.length >= 3
+        ? pearsonCorr(albumsConDurScores.map(a => a.durationMinutes), albumsConDurScores.map(a => a.thirdEyeScore))
+        : null;
+
+      const corrPctInterludio = pearsonCorr(
+        albums.map(a => a.totalCanciones > 0 ? a.interludios / a.totalCanciones : 0),
+        scores
+      );
+
+      resumenData.push(
+        ['', ''],
+        ['CORRELACIONES CON 3RD EYE SCORE', ''],
+        ['(r: −1 negativa · 0 nula · +1 positiva)', ''],
+        ['Total canciones', `r=${corrCanciones}   · ${corrLabel(corrCanciones)}`],
+        ['Interludios (absoluto)', `r=${corrInterludios} · ${corrLabel(corrInterludios)}`],
+        ['% Interludios', `r=${corrPctInterludio} · ${corrLabel(corrPctInterludio)}`],
+        ['Desviación típica', `r=${corrDesv}         · ${corrLabel(corrDesv)}`],
+        ['Notas ≥10', `r=${corrNotas10}      · ${corrLabel(corrNotas10)}`],
+      );
+
+      if (corrAno !== null) resumenData.push(['Año de publicación', `r=${corrAno} · ${corrLabel(corrAno)}`]);
+      if (corrDur !== null) resumenData.push(['Duración (minutos)', `r=${corrDur} · ${corrLabel(corrDur)}`]);
+
+      const corrPairs: [string, number][] = [
+        ['Total canciones', corrCanciones],
+        ['Interludios', corrInterludios],
+        ['% Interludios', corrPctInterludio],
+        ['Desv. típica', corrDesv],
+        ['Notas ≥10', corrNotas10],
+      ];
+      if (corrAno !== null) corrPairs.push(['Año', corrAno]);
+      if (corrDur !== null) corrPairs.push(['Duración', corrDur]);
+
+      const strongestCorr = corrPairs.reduce((best, cur) => Math.abs(cur[1]) > Math.abs(best[1]) ? cur : best);
+      const weakestCorr = corrPairs.reduce((best, cur) => Math.abs(cur[1]) < Math.abs(best[1]) ? cur : best);
+
+      resumenData.push(
+        ['', ''],
+        ['Mayor correlación', `${strongestCorr[0]} (r=${strongestCorr[1]})`],
+        ['Menor correlación', `${weakestCorr[0]}   (r=${weakestCorr[1]})`],
+      );
+
+      resumenData.push(['', ''], ['MEDIA DE NOTAS POR NÚMERO DE CANCIÓN', '']);
+      for (let i = 0; i < 100; i++) {
+        // contar cuantos albumes tienen i canciones
+        let albumesConCancionN = albums.filter(a => a.notaCancionesFull.length > i).length;
+        if (albumesConCancionN < 15) break;
+        const notasCancionN = albums.map(a => a.notaCancionesFull[i]).filter(n => n !== undefined);
+        if (notasCancionN.length > 0) {
+          const mediaN = notasCancionN.reduce((sum, n) => sum + n, 0) / notasCancionN.length;
+          //vamos a calcular tambien la media de las desviaciones de cada indice de cancion (media album menos nota cancion n)
+          const mediaDesvN = albums.map(a => {
+            if (a.notaCancionesFull.length > i && a.notaCancionesFull[i] !== null) {
+              const desv = a.notaCancionesFull[i] - a.media;
+              return desv;
+            }
+            return null;
+          }).filter(d => d !== null).reduce((sum, d) => sum + d!, 0) / notasCancionN.length;
+
+          resumenData.push([`Álbumes con al menos ${i + 1} cancion${i === 0 ? '' : 'es'}: ${albumesConCancionN}`, `${mediaN.toFixed(2)}, [${mediaDesvN > 0 ? '+' : ''}${mediaDesvN.toFixed(2)}]`]);
+        }
+      }
+
+      //vamos a hacer exactamente lo mismo pero porcentualmente en saltos de 10 en 10, asi una quinta cancion de un album de 6 canciones contaria como 83% y entraria en el grupo de "álbumes con al menos 80% de canciones"
+      resumenData.push(['', ''], ['MEDIA DE NOTAS POR PORCENTAJE DE CANCIÓN', '']);
+      for (let p = 10; p <= 100; p += 10) {
+        let albumesConCancionP = albums.filter(a => a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100)).length;
+        if (albumesConCancionP < 1) break;
+        const notasCancionP = albums.map(a => {
+          if (a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100)) {
             const index = Math.ceil(a.totalCanciones * p / 100) - 1;
-            const desv = a.notaCancionesFull[index] - a.media;
-            return desv;
+            return a.notaCancionesFull[index];
           }
           return null;
-        }).filter(d => d !== null).reduce((sum, d) => sum + d!, 0) / notasCancionP.length;
+        }).filter(n => n !== null) as number[];
+        if (notasCancionP.length > 0) {
+          const mediaP = notasCancionP.reduce((sum, n) => sum + n, 0) / notasCancionP.length;
+          const mediaDesvP = albums.map(a => {
+            if (a.notaCancionesFull.length >= Math.ceil(a.totalCanciones * p / 100) && a.notaCancionesFull[Math.ceil(a.totalCanciones * p / 100) - 1] !== null) {
+              const index = Math.ceil(a.totalCanciones * p / 100) - 1;
+              const desv = a.notaCancionesFull[index] - a.media;
+              return desv;
+            }
+            return null;
+          }).filter(d => d !== null).reduce((sum, d) => sum + d!, 0) / notasCancionP.length;
 
-        resumenData.push([`Media canciones al ${p}% del álbum`, `${mediaP.toFixed(2)}, [${mediaDesvP > 0 ? '+' : ''}${mediaDesvP.toFixed(2)}]`]);
+          resumenData.push([`Media canciones al ${p}% del álbum`, `${mediaP.toFixed(2)}, [${mediaDesvP > 0 ? '+' : ''}${mediaDesvP.toFixed(2)}]`]);
+        }
       }
-    }
 
 
-    // Write stats table
-    const tituloRange = resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
-    tituloRange.merge();
-    resumenSheet.getCell(resumenStartRow, resumenCol).setValue('RESUMEN GLOBAL');
-    tituloRange.getFormat().getFont().setBold(true);
-    tituloRange.getFormat().getFont().setSize(13);
-    tituloRange.getFormat().getFill().setColor('#1A252F');
-    tituloRange.getFormat().getFont().setColor('#FFFFFF');
-    tituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+      // Write stats table
+      const tituloRange = resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, 1, 2);
+      tituloRange.merge();
+      resumenSheet.getCell(resumenStartRow, resumenCol).setValue('RESUMEN GLOBAL');
+      tituloRange.getFormat().getFont().setBold(true);
+      tituloRange.getFormat().getFont().setSize(13);
+      tituloRange.getFormat().getFill().setColor('#1A252F');
+      tituloRange.getFormat().getFont().setColor('#FFFFFF');
+      tituloRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
-    resumenSheet.getRangeByIndexes(resumenStartRow + 1, resumenCol, resumenData.length, 2)
-      .setValues(resumenData);
+      resumenSheet.getRangeByIndexes(resumenStartRow + 1, resumenCol, resumenData.length, 2)
+        .setValues(resumenData);
 
-    for (let i = 0; i < resumenData.length; i++) {
-      const row = resumenStartRow + 1 + i;
-      const label = resumenData[i][0]?.toString() || '';
-      const cellRange = resumenSheet.getRangeByIndexes(row, resumenCol, 1, 2);
+      for (let i = 0; i < resumenData.length; i++) {
+        const row = resumenStartRow + 1 + i;
+        const label = resumenData[i][0]?.toString() || '';
+        const cellRange = resumenSheet.getRangeByIndexes(row, resumenCol, 1, 2);
 
-      if (label === '' && resumenData[i][1] === '') continue;
+        if (label === '' && resumenData[i][1] === '') continue;
 
-      if (label === label.toUpperCase() && label.length > 1 && resumenData[i][1] === '') {
-        cellRange.getFormat().getFont().setBold(true);
-        cellRange.getFormat().getFill().setColor('#34495E');
-        cellRange.getFormat().getFont().setColor('#FFFFFF');
-        cellRange.getFormat().getFont().setSize(10);
-      } else {
-        cellRange.getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
-        resumenSheet.getCell(row, resumenCol + 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.right);
+        if (label === label.toUpperCase() && label.length > 1 && resumenData[i][1] === '') {
+          cellRange.getFormat().getFont().setBold(true);
+          cellRange.getFormat().getFill().setColor('#34495E');
+          cellRange.getFormat().getFont().setColor('#FFFFFF');
+          cellRange.getFormat().getFont().setSize(10);
+        } else {
+          cellRange.getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
+          resumenSheet.getCell(row, resumenCol + 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.right);
+        }
       }
+
+      resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, resumenData.length + 1, 2)
+        .getFormat().autofitColumns();
+
+      console.log('Tabla resumen global generada.');
     }
-
-    resumenSheet.getRangeByIndexes(resumenStartRow, resumenCol, resumenData.length + 1, 2)
-      .getFormat().autofitColumns();
-
-    console.log('Tabla resumen global generada.');
-  }
   }
   renderResumen(albumsComp, todasLasNotasComp, generosPadreMapComp);
 
