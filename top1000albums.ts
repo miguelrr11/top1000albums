@@ -59,7 +59,7 @@ function main(workbook: ExcelScript.Workbook) {
   // Tipo de álbum. Un álbum es un LP normal salvo que su título lleve una etiqueta
   // de tipo ([OST], [LIVE], [SINGLE]). Los tipos especiales se listan en algunas
   // tablas pero NO cuentan para estadísticas, gráficos ni rankings.
-  type AlbumTipo = 'LP' | 'OST' | 'LIVE' | 'SINGLE';
+  type AlbumTipo = 'LP' | 'OST' | 'LIVE' | 'SINGLE' | 'EP';
 
   interface AlbumInfo {
     titulo: string;
@@ -213,6 +213,7 @@ function main(workbook: ExcelScript.Workbook) {
     { tag: '[OST]', tipo: 'OST' },
     { tag: '[LIVE]', tipo: 'LIVE' },
     { tag: '[SINGLE]', tipo: 'SINGLE' },
+    { tag: '[EP]', tipo: 'EP' },
   ];
 
   function detectarTipo(album: string): AlbumTipo {
