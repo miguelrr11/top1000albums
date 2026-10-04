@@ -400,8 +400,7 @@ function main(workbook: ExcelScript.Workbook) {
   const artistasMap: { [artista: string]: AlbumInfo[] } = {};
   const albums: AlbumInfo[] = [];
   const todasLasNotas: number[] = [];
-  const canciones105: CancionInfo[] = [];
-  const canciones10: CancionInfo[] = [];
+  const cancionesConNota: CancionInfo[] = [];
   const values = usedRange.getValues();
   const numRows = values.length;
   const numCols = values[0].length;
@@ -444,23 +443,14 @@ function main(workbook: ExcelScript.Workbook) {
           if (typeof notaValue === 'number' && notaValue >= 0 && notaValue <= 10.5) {
             notas.push(notaValue);
             todasLasNotas.push(notaValue);
-            if (notaValue === 10.5) {
-              canciones105.push({
-                titulo: cancionNombre.toString(),
-                artista,
-                albumTitulo: album,
-                genero: '',
-                albumThirdEyeScore: 0,
-              });
-            } else if (notaValue === 10) {
-              canciones10.push({
-                titulo: cancionNombre.toString(),
-                artista,
-                albumTitulo: album,
-                genero: '',
-                albumThirdEyeScore: 0,
-              });
-            }
+            cancionesConNota.push({
+              titulo: cancionNombre.toString(),
+              artista,
+              albumTitulo: album,
+              genero: '',
+              albumThirdEyeScore: 0,
+              nota: notaValue,
+            });
           } else {
             interludios++;
           }
@@ -602,16 +592,11 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
 
-  // Enriquecer canciones 10.5 y 10 con género y thirdEyeScore del álbum (disponibles tras asignar persistentes)
-  for (const cancion of canciones105) {
-    const matchingAlbum = albums.find(a => a.artista === cancion.artista && a.album === cancion.albumTitulo);
-    if (matchingAlbum) {
-      cancion.genero = matchingAlbum.subgeneros;
-      cancion.albumThirdEyeScore = matchingAlbum.thirdEyeScore;
-    }
-  }
-  for (const cancion of canciones10) {
-    const matchingAlbum = albums.find(a => a.artista === cancion.artista && a.album === cancion.albumTitulo);
+  // Enriquecer canciones con género y thirdEyeScore del álbum (disponibles tras asignar persistentes)
+  const albumPorClave: { [key: string]: AlbumInfo } = {};
+  for (const album of albums) albumPorClave[`${album.artista}|${album.album}`] = album;
+  for (const cancion of cancionesConNota) {
+    const matchingAlbum = albumPorClave[`${cancion.artista}|${cancion.albumTitulo}`];
     if (matchingAlbum) {
       cancion.genero = matchingAlbum.subgeneros;
       cancion.albumThirdEyeScore = matchingAlbum.thirdEyeScore;
@@ -625,12 +610,14 @@ function main(workbook: ExcelScript.Workbook) {
   const AJUSTES_COL = 6; // columna G
 
   let ajustesTotalCanciones = 100;
-  let ajustesPorAlbum = 1;
+  let ajustesPorAlbum = 0; // 0 = sin límite
   let ajustesPorArtista = 0; // 0 = sin límite
   let ajustesRandomizar = true;
+  let ajustesIncluirGeneros = ''; // lista separada por comas; MAYÚSCULAS = género padre, minúsculas = subgénero
+  let ajustesExcluirSubgeneros = ''; // misma convención que arriba
 
   {
-    const ajustesValues = topCancionesSheet.getRangeByIndexes(1, AJUSTES_COL, 4, 2).getValues();
+    const ajustesValues = topCancionesSheet.getRangeByIndexes(1, AJUSTES_COL, 6, 2).getValues();
 
     const parseIntPositivo = (raw: string | number | boolean, def: number): number => {
       const n = typeof raw === 'number' ? raw : parseInt((raw?.toString() || '').trim());
@@ -638,11 +625,14 @@ function main(workbook: ExcelScript.Workbook) {
     };
 
     ajustesTotalCanciones = parseIntPositivo(ajustesValues[0][1], 100);
-    ajustesPorAlbum = parseIntPositivo(ajustesValues[1][1], 1);
+    ajustesPorAlbum = parseIntPositivo(ajustesValues[1][1], 0);
     ajustesPorArtista = parseIntPositivo(ajustesValues[2][1], 0);
 
     const rawRandomizar = ajustesValues[3][1]?.toString().trim().toUpperCase();
     ajustesRandomizar = rawRandomizar !== 'NO'; // por defecto SI, salvo que ponga explícitamente NO
+
+    ajustesIncluirGeneros = ajustesValues[4][1]?.toString().trim() || '';
+    ajustesExcluirSubgeneros = ajustesValues[5][1]?.toString().trim() || '';
   }
 
   // =================== CLEAR TABLE AREA ===================
@@ -683,7 +673,11 @@ function main(workbook: ExcelScript.Workbook) {
 
   const headers = headersBase.map(h => h === headerWithAsterisk ? `${h} *` : h);
 
-  albums.sort((a, b) => {
+  // Copia para la tabla principal: NO mutamos `albums`. Si se ordenara in-place,
+  // el orden elegido aquí (vía el asterisco) se filtraría a los TOP/rankings de
+  // más abajo, que usan Array.sort (estable) sobre `albums` y pueden tener empates
+  // de thirdEyeScore — el orden de esos empates dependería entonces de este sort.
+  const albumsOrdenados: AlbumInfo[] = albums.slice().sort((a, b) => {
     const valueA = a[sortBy];
     const valueB = b[sortBy];
     if (typeof valueA === 'number' && typeof valueB === 'number') return valueB - valueA;
@@ -715,7 +709,7 @@ function main(workbook: ExcelScript.Workbook) {
   headerRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
 
   // Data rows — built from COLUMNS, no hardcoded field list
-  const dataRows: (string | number)[][] = albums.map((album, index) =>
+  const dataRows: (string | number)[][] = albumsOrdenados.map((album, index) =>
     COLUMNS.map(col => {
       if (col.property === '#') return index + 1;
       const val = album[col.property as keyof AlbumInfo];
@@ -747,13 +741,13 @@ function main(workbook: ExcelScript.Workbook) {
     }
 
     // Alternating row background (skip the # column)
-    for (let i = 0; i < albums.length; i++) {
+    for (let i = 0; i < albumsOrdenados.length; i++) {
       tablaAlbumsSheet.getRangeByIndexes(startRow + 2 + i, columnaInicio, 1, headers.length - 1)
         .getFormat().getFill().setColor(i % 2 === 0 ? '#F5F5F5' : '#FFFFFF');
     }
 
     // Per-cell colors: ranking medals and colorFn columns
-    for (let i = 0; i < albums.length; i++) {
+    for (let i = 0; i < albumsOrdenados.length; i++) {
       const row = startRow + 2 + i;
 
       // # column: gold / silver / bronze / grey
@@ -763,14 +757,14 @@ function main(workbook: ExcelScript.Workbook) {
       for (let colIdx = 0; colIdx < COLUMNS.length; colIdx++) {
         const col = COLUMNS[colIdx];
         if (col.colorFn) {
-          const val = albums[i][col.property as keyof AlbumInfo] as number;
+          const val = albumsOrdenados[i][col.property as keyof AlbumInfo] as number;
           tablaAlbumsSheet.getCell(row, columnaRanking + colIdx).getFormat().getFill().setColor(col.colorFn(val));
         }
       }
     }
   }
 
-  tablaAlbumsSheet.getRangeByIndexes(startRow, columnaRanking, albums.length + 2, headers.length + 1)
+  tablaAlbumsSheet.getRangeByIndexes(startRow, columnaRanking, albumsOrdenados.length + 2, headers.length + 1)
     .getFormat().autofitColumns();
 
   console.log(`Procesados ${albums.length} álbumes y ordenados por ${sortBy}.`);
@@ -1267,15 +1261,41 @@ function main(workbook: ExcelScript.Workbook) {
     console.log("AVISO: no existe la hoja 'Mapeo Generos'; se omiten géneros padre.");
   }
 
-  // Devuelve los géneros padre de un álbum (sin duplicar si dos subgéneros comparten padre)
-  function getGenerosPadre(album: AlbumInfo): string[] {
-    if (!album.subgeneros) return [];
+  // Devuelve los géneros padre a partir de una lista de subgéneros separada por comas
+  // (sin duplicar si dos subgéneros comparten padre)
+  function getGenerosPadreDeSubgeneros(subgenerosStr: string): string[] {
+    if (!subgenerosStr) return [];
     const parents = new Set<string>();
-    for (const sub of album.subgeneros.split(',').map(g => g.trim()).filter(g => g)) {
+    for (const sub of subgenerosStr.split(',').map(g => g.trim()).filter(g => g)) {
       const parent = subgenreToParent[sub];
       if (parent) parents.add(parent);
     }
     return Array.from(parents);
+  }
+
+  // Devuelve los géneros padre de un álbum (sin duplicar si dos subgéneros comparten padre)
+  function getGenerosPadre(album: AlbumInfo): string[] {
+    return getGenerosPadreDeSubgeneros(album.subgeneros);
+  }
+
+  // ¿Alguno de los tokens de `lista` (separados por comas) coincide con los subgéneros/géneros
+  // padre de `subgenerosStr`? Un token en MAYÚSCULAS se busca entre los géneros padre;
+  // un token en minúsculas (o mixto) se busca entre los subgéneros. Comparación sin distinguir mayúsculas.
+  function coincideConLista(subgenerosStr: string, lista: string): boolean {
+    const tokens = lista.split(',').map(t => t.trim()).filter(t => t);
+    if (tokens.length === 0) return false;
+
+    const subgenerosPropios = subgenerosStr
+      ? subgenerosStr.split(',').map(g => g.trim()).filter(g => g)
+      : [];
+    const generosPadrePropios = getGenerosPadreDeSubgeneros(subgenerosStr);
+
+    return tokens.some(token => {
+      if (token === token.toUpperCase()) {
+        return generosPadrePropios.some(p => p.toUpperCase() === token.toUpperCase());
+      }
+      return subgenerosPropios.some(s => s.toLowerCase() === token.toLowerCase());
+    });
   }
 
   // Agrupa álbumes por género padre (cada álbum cuenta una sola vez por género)
@@ -1343,34 +1363,38 @@ function main(workbook: ExcelScript.Workbook) {
   return copy.slice(0, n);
 }
 
-  // =================== TOP CANCIONES 10.5 ===================
+  // =================== TOP CANCIONES ===================
 
   function renderTopCanciones(
     sheet: ExcelScript.Worksheet,
     canciones: CancionInfo[],
     maxRows: number,
-    maxPerAlbum: number,
+    maxPerAlbum: number, // 0 = sin límite
     maxPerArtista: number, // 0 = sin límite
     randomizar: boolean,
-    cancionesRelleno: CancionInfo[] = [],
+    incluirGeneros: string, // tokens separados por comas; sólo para reescribir el bloque de ajustes
+    excluirSubgeneros: string, // ídem
   ): void {
     const headers = ['#', 'Canción', 'Álbum', 'Artista', 'Subgénero'];
     const numColsTabla = headers.length;
 
-    // Agrupar canciones por álbum, luego recorrer álbumes ordenados por thirdEyeScore desc.
-    // Por cada álbum se añaden hasta maxPerAlbum canciones, respetando el cupo por artista.
-    const songsByAlbum: { [key: string]: CancionInfo[] } = {};
+    // Se recorren los niveles de nota de mayor a menor (10.5, 10, 9.5, ...) y dentro de cada
+    // nivel los álbumes por thirdEyeScore desc, hasta llegar a maxRows. Los cupos por álbum
+    // y por artista son acumulados entre niveles.
+    const cancionesPorNota: { [nota: string]: CancionInfo[] } = {};
     for (const c of canciones) {
-      const key = `${c.artista}|${c.albumTitulo}`;
-      if (!songsByAlbum[key]) songsByAlbum[key] = [];
-      songsByAlbum[key].push(c);
+      const k = c.nota.toString();
+      if (!cancionesPorNota[k]) cancionesPorNota[k] = [];
+      cancionesPorNota[k].push(c);
     }
-
-    const albumKeys = Object.keys(songsByAlbum)
-      .sort((a, b) => songsByAlbum[b][0].albumThirdEyeScore - songsByAlbum[a][0].albumThirdEyeScore);
+    const nivelesNota = Object.keys(cancionesPorNota).sort((a, b) => parseFloat(b) - parseFloat(a));
 
     const result: CancionInfo[] = [];
+    const albumCount: { [key: string]: number } = {};
     const artistaCount: { [artista: string]: number } = {};
+    const conteoPorNota: { [nota: string]: number } = {};
+    const cupoAlbumMax = maxPerAlbum > 0 ? maxPerAlbum : Infinity;
+    const cupoArtistaMax = maxPerArtista > 0 ? maxPerArtista : Infinity;
 
     // Elige `n` canciones de `songs`: al azar si randomizar=true, si no las primeras n en orden.
     function pickSongs(songs: CancionInfo[], n: number): CancionInfo[] {
@@ -1378,43 +1402,33 @@ function main(workbook: ExcelScript.Workbook) {
       return randomizar ? pickRandom(songs, n) : songs.slice(0, n);
     }
 
-    for (const key of albumKeys) {
+    for (const nivel of nivelesNota) {
       if (result.length >= maxRows) break;
-      const songs = songsByAlbum[key];
-      const artista = songs[0].artista;
-      const cupoArtista = maxPerArtista > 0 ? maxPerArtista - (artistaCount[artista] || 0) : Infinity;
-      const cupo = Math.min(maxPerAlbum, maxRows - result.length, cupoArtista);
-      if (cupo <= 0) continue;
-      const toAdd = pickSongs(songs, cupo);
-      for (const s of toAdd) result.push(s);
-      artistaCount[artista] = (artistaCount[artista] || 0) + toAdd.length;
-    }
 
-    // Relleno con canciones 10 si no se ha llegado a maxRows
-    if (result.length < maxRows && cancionesRelleno.length > 0) {
-      const albumsYaUsados = new Set(result.map(c => `${c.artista}|${c.albumTitulo}`));
-
-      const fillerByAlbum: { [key: string]: CancionInfo[] } = {};
-      for (const c of cancionesRelleno) {
+      const songsByAlbum: { [key: string]: CancionInfo[] } = {};
+      for (const c of cancionesPorNota[nivel]) {
         const key = `${c.artista}|${c.albumTitulo}`;
-        if (albumsYaUsados.has(key)) continue;
-        if (!fillerByAlbum[key]) fillerByAlbum[key] = [];
-        fillerByAlbum[key].push(c);
+        if (!songsByAlbum[key]) songsByAlbum[key] = [];
+        songsByAlbum[key].push(c);
       }
+      const albumKeys = Object.keys(songsByAlbum)
+        .sort((a, b) => songsByAlbum[b][0].albumThirdEyeScore - songsByAlbum[a][0].albumThirdEyeScore);
 
-      const fillerAlbumKeys = Object.keys(fillerByAlbum)
-        .sort((a, b) => fillerByAlbum[b][0].albumThirdEyeScore - fillerByAlbum[a][0].albumThirdEyeScore);
-
-      for (const key of fillerAlbumKeys) {
+      for (const key of albumKeys) {
         if (result.length >= maxRows) break;
-        const songs = fillerByAlbum[key];
+        const songs = songsByAlbum[key];
         const artista = songs[0].artista;
-        const cupoArtista = maxPerArtista > 0 ? maxPerArtista - (artistaCount[artista] || 0) : Infinity;
-        const cupo = Math.min(maxPerAlbum, maxRows - result.length, cupoArtista);
+        const cupo = Math.min(
+          cupoAlbumMax - (albumCount[key] || 0),
+          cupoArtistaMax - (artistaCount[artista] || 0),
+          maxRows - result.length,
+        );
         if (cupo <= 0) continue;
         const toAdd = pickSongs(songs, cupo);
         for (const s of toAdd) result.push(s);
+        albumCount[key] = (albumCount[key] || 0) + toAdd.length;
         artistaCount[artista] = (artistaCount[artista] || 0) + toAdd.length;
+        conteoPorNota[nivel] = (conteoPorNota[nivel] || 0) + toAdd.length;
       }
     }
 
@@ -1430,23 +1444,41 @@ function main(workbook: ExcelScript.Workbook) {
 
     const ajustesRows: (string | number)[][] = [
       ['Canciones totales', maxRows],
-      ['Canciones por álbum', maxPerAlbum],
+      ['Canciones por álbum', maxPerAlbum > 0 ? maxPerAlbum : ''],
       ['Canciones por artista', maxPerArtista > 0 ? maxPerArtista : ''],
       ['Randomizar en empate', randomizar ? 'SI' : 'NO'],
+      ['Incluir Géneros', incluirGeneros],
+      ['Excluir Subgéneros', excluirSubgeneros],
     ];
     const ajustesDataRange = sheet.getRangeByIndexes(1, AJUSTES_COL, ajustesRows.length, 2);
     ajustesDataRange.setValues(ajustesRows);
     sheet.getRangeByIndexes(1, AJUSTES_COL, ajustesRows.length, 1).getFormat().getFont().setBold(true);
-    sheet.getRangeByIndexes(1, AJUSTES_COL + 1, ajustesRows.length, 1)
-      .getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
     sheet.getRangeByIndexes(0, AJUSTES_COL, ajustesRows.length + 1, 2).getFormat().autofitColumns();
 
+    // Nota de ayuda bajo los ajustes (fuera del autofit para no ensanchar la columna)
+    const ayuda = [
+      ['Géneros: separados por comas'],
+      ['MAYÚSCULAS = género padre (ej: METAL)'],
+      ['minúsculas = subgénero (ej: thrash metal)'],
+    ];
+    const ayudaRange = sheet.getRangeByIndexes(ajustesRows.length + 2, AJUSTES_COL, ayuda.length, 1);
+    ayudaRange.setValues(ayuda);
+    ayudaRange.getFormat().getFont().setItalic(true);
+    ayudaRange.getFormat().getFont().setColor('#7F8C8D');
+
     // Título
-    const fillerCount = result.filter(c => !canciones.some(x => x.titulo === c.titulo && x.artista === c.artista && x.albumTitulo === c.albumTitulo)).length;
-    const limites = `máx. ${maxPerAlbum} por álbum${maxPerArtista > 0 ? `, máx. ${maxPerArtista} por artista` : ''}`;
-    const titulo = fillerCount > 0
-      ? `TOP ${maxRows} CANCIONES 10.5 [${maxRows - fillerCount}] + relleno 10 [${fillerCount}] (${limites})`
-      : `TOP ${maxRows} CANCIONES 10.5 (${limites})`;
+    const desglose = nivelesNota
+      .filter(n => conteoPorNota[n] > 0)
+      .map(n => `${n}: ${conteoPorNota[n]}`)
+      .join(' · ');
+    const limiteAlbumTxt = maxPerAlbum > 0 ? `máx. ${maxPerAlbum} por álbum` : '';
+    const limiteArtistaTxt = maxPerArtista > 0 ? `máx. ${maxPerArtista} por artista` : '';
+    const limites = limiteAlbumTxt && limiteArtistaTxt
+      ? `${limiteAlbumTxt}, ${limiteArtistaTxt}`
+      : (limiteAlbumTxt || limiteArtistaTxt || 'sin límites por álbum/artista');
+    const titulo = desglose
+      ? `TOP ${result.length} CANCIONES [${desglose}] (${limites})`
+      : `TOP 0 CANCIONES (${limites})`;
     const tituloRange = sheet.getRangeByIndexes(0, 0, 1, numColsTabla);
     tituloRange.merge();
     sheet.getCell(0, 0).setValue(titulo);
@@ -1509,14 +1541,25 @@ function main(workbook: ExcelScript.Workbook) {
     console.log(`TOP Canciones: ${result.length} canciones generadas.`);
   }
 
+  // Filtro por géneros: un token en MAYÚSCULAS compara contra géneros padre,
+  // en minúsculas contra subgéneros (ver coincideConLista).
+  function pasaFiltroGeneros(cancion: CancionInfo): boolean {
+    if (ajustesIncluirGeneros && !coincideConLista(cancion.genero, ajustesIncluirGeneros)) return false;
+    if (ajustesExcluirSubgeneros && coincideConLista(cancion.genero, ajustesExcluirSubgeneros)) return false;
+    return true;
+  }
+
+  const cancionesFiltradas = cancionesConNota.filter(c => pasaFiltroGeneros(c));
+
   renderTopCanciones(
     topCancionesSheet,
-    canciones105,
+    cancionesFiltradas,
     ajustesTotalCanciones,
     ajustesPorAlbum,
     ajustesPorArtista,
     ajustesRandomizar,
-    canciones10,
+    ajustesIncluirGeneros,
+    ajustesExcluirSubgeneros,
   );
 
   // =================== TABLA RESUMEN: ESTADÍSTICAS GLOBALES ===================
