@@ -14,7 +14,12 @@
  * 3. Las canciones deben estar en filas consecutivas debajo del título
  * 4. Las notas van en la columna inmediatamente a la derecha del nombre de canción
  * 5. Los interludios son canciones sin nota (celda vacía o sin número válido)
- * 6. Copia y pega este código en Excel: Automatizar > Nuevo script
+ * 6. Opcional: en la celda vacía tras la última canción escribe la línea de info
+ *       <año>, <subgéneros separados por comas>, <duración>
+ *    (ej: 2001, progressive metal, art rock, 1h 18m). El script rellena Año, Subgéneros
+ *    y Duración en "Tabla Albums", pone la fecha de review de hoy (si no tenía) y vacía
+ *    la celda. Si falta alguna de las tres partes, no rellena nada, deja la celda y avisa.
+ * 7. Copia y pega este código en Excel: Automatizar > Nuevo script
  *
  * NOTA: El comentario @ts-nocheck es solo para evitar errores en editores locales.
  *       Excel proporciona automáticamente las definiciones de ExcelScript.
@@ -109,6 +114,16 @@ function main(workbook: ExcelScript.Workbook) {
     nota: number;
   }
 
+  // Línea de info válida encontrada al final de un álbum en la hoja Albums
+  interface LineaInfo {
+    album: AlbumInfo;
+    fila: number;     // índices relativos a usedRange de la hoja Albums
+    columna: number;
+    year: number;
+    subgeneros: string;
+    duration: string;
+  }
+
   /**
    * Describes a single column in the albums table.
    *
@@ -198,6 +213,20 @@ function main(workbook: ExcelScript.Workbook) {
     if (align === 'center') return ExcelScript.HorizontalAlignment.center;
     if (align === 'right') return ExcelScript.HorizontalAlignment.right;
     return ExcelScript.HorizontalAlignment.left;
+  }
+
+  // Coeficiente de correlación de Pearson (−1 negativa · 0 nula · +1 positiva).
+  // Lo usan tanto la hoja "Resumen" como el gráfico de correlaciones.
+  function pearsonCorr(xs: number[], ys: number[]): number {
+    const nn = xs.length;
+    if (nn < 3) return 0;
+    const mx = xs.reduce((s, v) => s + v, 0) / nn;
+    const my = ys.reduce((s, v) => s + v, 0) / nn;
+    const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
+    const dx = Math.sqrt(xs.reduce((s, v) => s + Math.pow(v - mx, 2), 0));
+    const dy = Math.sqrt(ys.reduce((s, v) => s + Math.pow(v - my, 2), 0));
+    if (dx === 0 || dy === 0) return 0;
+    return Math.round((num / (dx * dy)) * 1000) / 1000;
   }
 
   // =================== TIPO DE ÁLBUM ===================
@@ -395,12 +424,52 @@ function main(workbook: ExcelScript.Workbook) {
     if (col.artistHeader) headerToProperty[col.artistHeader] = sortProp;
   }
 
+  // =================== LÍNEA DE INFO (hoja Albums) ===================
+  //
+  // La celda que cierra un álbum (antes siempre vacía) puede llevar:
+  //     <año>, <subgéneros separados por comas>, <duración>
+  // p. ej. "1972, progressive rock, art rock, 1h 2m".
+  //
+  // pareceLineaInfo() decide si la celda ES la línea de info (y no una canción);
+  // parseLineaInfo() decide si está COMPLETA. Una línea que lo parece pero está
+  // incompleta no cuenta como canción, no se aplica y se queda en su celda.
+
+  const RE_DURACION = /^\d+h(\s*\d+m)?$|^\d+m$/;
+
+  // ¿Esta celda cierra el álbum? (vacía o título del siguiente álbum)
+  function esFinDeBloque(valor: string | number | boolean): boolean {
+    return !valor || (typeof valor === 'string' && valor.startsWith('*'));
+  }
+
+  // Tiene comas y empieza por un año o acaba en una duración. Así un título de
+  // canción con comas ("Goodbye, Farewell") no se confunde con la línea de info.
+  function pareceLineaInfo(texto: string): boolean {
+    if (!texto.includes(',')) return false;
+    const partes = texto.split(',').map(p => p.trim());
+    return /^\d{4}$/.test(partes[0]) || RE_DURACION.test(partes[partes.length - 1]);
+  }
+
+  // Devuelve null si falta alguna de las tres partes. Subgéneros en minúsculas.
+  function parseLineaInfo(texto: string): { year: number; subgeneros: string; duration: string } | null {
+    const partes = texto.split(',').map(p => p.trim()).filter(p => p);
+    if (partes.length < 3) return null;
+
+    const year = parseInt(partes[0]);
+    const duration = partes[partes.length - 1];
+    if (!/^\d{4}$/.test(partes[0]) || year <= 1900 || year >= 2100) return null;
+    if (!RE_DURACION.test(duration)) return null;
+
+    const subgeneros = partes.slice(1, -1).map(g => g.toLowerCase()).join(', ');
+    return { year, subgeneros, duration };
+  }
+
   // =================== SCAN SPREADSHEET FOR ALBUMS ===================
 
   const artistasMap: { [artista: string]: AlbumInfo[] } = {};
   const albums: AlbumInfo[] = [];
   const todasLasNotas: number[] = [];
   const cancionesConNota: CancionInfo[] = [];
+  const lineasInfo: LineaInfo[] = [];
   const values = usedRange.getValues();
   const numRows = values.length;
   const numCols = values[0].length;
@@ -426,13 +495,21 @@ function main(workbook: ExcelScript.Workbook) {
         let totalCanciones = 0;
         let interludios = 0;
         let currentRow = row + 1;
+        let filaLineaInfo = -1;
 
         while (currentRow < numRows) {
           const cancionNombre = values[currentRow][col];
           const notaValue = values[currentRow][col + 1];
 
-          if (!cancionNombre ||
-            (typeof cancionNombre === 'string' && cancionNombre.startsWith('*'))) {
+          if (esFinDeBloque(cancionNombre)) {
+            break;
+          }
+
+          // Última celda del bloque, sin nota y con forma de línea de info → cierra el álbum
+          const esUltimaCelda = currentRow + 1 >= numRows || esFinDeBloque(values[currentRow + 1][col]);
+          if (esUltimaCelda && typeof notaValue !== 'number' &&
+            typeof cancionNombre === 'string' && pareceLineaInfo(cancionNombre)) {
+            filaLineaInfo = currentRow;
             break;
           }
 
@@ -482,7 +559,7 @@ function main(workbook: ExcelScript.Workbook) {
 
           const thirdEyeScore = Math.round(thirdEyeScoreRaw * 100) / 100;
 
-          albums.push({
+          const albumInfo: AlbumInfo = {
             titulo: tituloCompleto,
             artista,
             album,
@@ -504,7 +581,19 @@ function main(workbook: ExcelScript.Workbook) {
             durationMinutes: 0,
             dateOfReview: '',
             dateOfReviewTimestamp: 0,
-          });
+          };
+          albums.push(albumInfo);
+
+          if (filaLineaInfo !== -1) {
+            const texto = values[filaLineaInfo][col] as string;
+            const info = parseLineaInfo(texto);
+            if (info) {
+              lineasInfo.push({ album: albumInfo, fila: filaLineaInfo, columna: col, ...info });
+            } else {
+              console.log(`AVISO: línea de info incompleta en "${tituloCompleto}" → "${texto}". ` +
+                `Formato: <año>, <subgéneros>, <duración> (ej: 1972, art rock, 1h 2m). No se ha aplicado.`);
+            }
+          }
         }
       }
     }
@@ -590,6 +679,27 @@ function main(workbook: ExcelScript.Workbook) {
         if (col.postAssign) col.postAssign(album);
       }
     }
+  }
+
+  // =================== APLICA LÍNEAS DE INFO ===================
+  // Después de los datos persistentes, para sobrescribir Año, Subgéneros y Duración.
+  // La fecha de review (hoy, DD/MM/YYYY) solo se pone si el álbum aún no tenía una.
+
+  const hoy = new Date();
+  const fechaHoy = `${hoy.getDate().toString().padStart(2, '0')}/${(hoy.getMonth() + 1).toString().padStart(2, '0')}/${hoy.getFullYear()}`;
+
+  for (const info of lineasInfo) {
+    const album = info.album;
+    album.year = info.year;
+    album.subgeneros = info.subgeneros;
+    album.duration = info.duration;
+    const fechaNueva = !album.dateOfReview;
+    if (fechaNueva) album.dateOfReview = fechaHoy;
+    for (const col of COLUMNS) {
+      if (col.postAssign) col.postAssign(album);
+    }
+    console.log(`Línea de info aplicada → ${album.titulo}: ${info.year} · ${info.subgeneros} · ${info.duration}` +
+      (fechaNueva ? ` · review ${fechaHoy}` : ` · review ya tenía fecha (${album.dateOfReview})`));
   }
 
   // Enriquecer canciones con género y thirdEyeScore del álbum (disponibles tras asignar persistentes)
@@ -1355,13 +1465,13 @@ function main(workbook: ExcelScript.Workbook) {
   }
 
   function pickRandom<T>(arr: T[], n: number): T[] {
-  const copy = arr.slice();
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+    const copy = arr.slice();
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, n);
   }
-  return copy.slice(0, n);
-}
 
   // =================== TOP CANCIONES ===================
 
@@ -1849,19 +1959,7 @@ function main(workbook: ExcelScript.Workbook) {
         );
       }
 
-      // --- Correlation stats ---
-      function pearsonCorr(xs: number[], ys: number[]): number {
-        const nn = xs.length;
-        if (nn < 3) return 0;
-        const mx = xs.reduce((s, v) => s + v, 0) / nn;
-        const my = ys.reduce((s, v) => s + v, 0) / nn;
-        const num = xs.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0);
-        const dx = Math.sqrt(xs.reduce((s, v) => s + Math.pow(v - mx, 2), 0));
-        const dy = Math.sqrt(ys.reduce((s, v) => s + Math.pow(v - my, 2), 0));
-        if (dx === 0 || dy === 0) return 0;
-        return Math.round((num / (dx * dy)) * 1000) / 1000;
-      }
-
+      // --- Correlation stats --- (pearsonCorr vive en HELPER FUNCTIONS: la comparten resumen y gráficos)
       function corrLabel(r: number): string {
         const abs = Math.abs(r);
         const dir = r >= 0 ? '↑' : '↓';
@@ -2045,7 +2143,7 @@ function main(workbook: ExcelScript.Workbook) {
     // --- Rejilla de colocación de gráficos (coordenadas absolutas en px) ---
     const CHART_W = 480;
     const CHART_H = 300;
-    const CHARTS_PER_ROW = 2;
+    const CHARTS_PER_ROW = 3;
     const GAP_X = 25;
     const GAP_Y = 25;
     const MARGIN = 10;
@@ -2096,6 +2194,66 @@ function main(workbook: ExcelScript.Workbook) {
       return chart;
     }
 
+    // ---------- EJES "CON ZOOM" ----------
+    // Excel arranca el eje de valores en 0. Si todas las medias caen entre 7,8 y 8,4
+    // el gráfico se convierte en una fila de barras casi idénticas y no se ve nada.
+    // zoomValueAxis() recorta el eje al rango real de los datos (con un margen),
+    // así la variación ocupa todo el alto del gráfico.
+    //
+    // OJO: al no empezar en 0, las alturas dejan de ser proporcionales al valor —
+    // el gráfico sirve para COMPARAR entre sí, no para leer magnitudes absolutas.
+    // Por eso NO se aplica a gráficos de conteos (nº de álbumes, frecuencias…),
+    // donde el 0 sí es una referencia significativa.
+
+    const round4 = (v: number) => Math.round(v * 10000) / 10000;
+
+    // Redondea un paso "feo" (0,137) al siguiente valor legible (0,2)
+    function niceStep(raw: number): number {
+      if (!(raw > 0)) return 1;
+      const exp = Math.floor(Math.log(raw) / Math.LN10);
+      const pow = Math.pow(10, exp);
+      const frac = raw / pow;
+      const nice = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 2.5 ? 2.5 : frac <= 5 ? 5 : 10;
+      return nice * pow;
+    }
+
+    function zoomedRange(values: number[], padRatio: number): { min: number; max: number; unit: number } | null {
+      const vals = values.filter(v => typeof v === 'number' && isFinite(v));
+      if (vals.length === 0) return null;
+      const vMin = Math.min(...vals);
+      const vMax = Math.max(...vals);
+      const span = vMax - vMin;
+      const step = niceStep((span > 0 ? span : Math.abs(vMax) || 1) / 4);
+      const pad = span > 0 ? span * padRatio : step;
+      return {
+        min: round4(Math.floor((vMin - pad) / step) * step),
+        max: round4(Math.ceil((vMax + pad) / step) * step),
+        unit: step,
+      };
+    }
+
+    function zoomValueAxis(chart: ExcelScript.Chart | null, values: number[], padRatio: number = 0.12): void {
+      if (!chart) return;
+      const r = zoomedRange(values, padRatio);
+      if (!r || r.max <= r.min) return;
+      const axis = chart.getAxes().getValueAxis();
+      axis.setMinimum(r.min);
+      axis.setMaximum(r.max);
+      axis.setMajorUnit(r.unit);
+    }
+
+    // En un XY scatter el eje X es el "category axis" del modelo de objetos de Excel.
+    function zoomScatterAxes(chart: ExcelScript.Chart | null, xs: number[], ys: number[]): void {
+      if (!chart) return;
+      const rx = zoomedRange(xs, 0.05);
+      if (rx && rx.max > rx.min) {
+        const axisX = chart.getAxes().getCategoryAxis();
+        axisX.setMinimum(rx.min);
+        axisX.setMaximum(rx.max);
+      }
+      zoomValueAxis(chart, ys, 0.08);
+    }
+
     // ---------- 1 & 2. Evolución temporal de reviews ----------
     const reviewed = albums
       .filter(a => a.dateOfReviewTimestamp > 0)
@@ -2103,10 +2261,12 @@ function main(workbook: ExcelScript.Workbook) {
 
     if (reviewed.length > 0) {
       const monthCounts: { [k: string]: number } = {};
+      const monthSum: { [k: string]: number } = {};
       for (const a of reviewed) {
         const d = new Date(a.dateOfReviewTimestamp);
         const key = `${d.getUTCFullYear()}-${(d.getUTCMonth() + 1).toString().padStart(2, '0')}`;
         monthCounts[key] = (monthCounts[key] || 0) + 1;
+        monthSum[key] = (monthSum[key] || 0) + a.media;
       }
       const monthKeys = Object.keys(monthCounts).sort();
       const [fy, fm] = monthKeys[0].split('-').map(s => Number(s));
@@ -2114,6 +2274,7 @@ function main(workbook: ExcelScript.Workbook) {
 
       const mesAcum: (string | number)[][] = [];
       const mesMensual: (string | number)[][] = [];
+      const mesMedia: (string | number)[][] = [];
       let y = fy, m = fm, cum = 0;
       while (y < ly || (y === ly && m <= lm)) {
         const key = `${y}-${m.toString().padStart(2, '0')}`;
@@ -2121,6 +2282,8 @@ function main(workbook: ExcelScript.Workbook) {
         cum += c;
         mesAcum.push([key, cum]);
         mesMensual.push([key, c]);
+        // Los meses sin reviews se omiten en la media: un 0 hundiría la escala.
+        if (c > 0) mesMedia.push([key, rd2(monthSum[key] / c)]);
         m++; if (m > 12) { m = 1; y++; }
       }
 
@@ -2133,6 +2296,52 @@ function main(workbook: ExcelScript.Workbook) {
         ExcelScript.ChartType.columnClustered,
         writeBlock(['Mes', 'Reviews del mes'], mesMensual),
         'Reviews por mes (ritmo de reseñas)',
+      );
+
+      // --- Evolución de la media según se van reseñando álbumes ---
+      // Un punto por álbum, en orden cronológico de review. Responde a:
+      // "¿cuál era mi media con TODO lo reseñado hasta esa fecha?" (media acumulada)
+      // y "¿cómo puntuaba en esa época concreta?" (media móvil de los últimos N).
+      // La acumulada se estabiliza con el tiempo; la móvil enseña las rachas.
+      const VENTANA = reviewed.length >= 40 ? 20 : Math.max(3, Math.floor(reviewed.length / 4));
+      const evolucionRows: (string | number)[][] = [];
+      let sumMedia = 0;
+      let sumScore = 0;
+      for (let i = 0; i < reviewed.length; i++) {
+        sumMedia += reviewed[i].media;
+        sumScore += reviewed[i].thirdEyeScore;
+        const desde = Math.max(0, i - VENTANA + 1);
+        let sumVentana = 0;
+        for (let j = desde; j <= i; j++) sumVentana += reviewed[j].media;
+        evolucionRows.push([
+          reviewed[i].dateOfReview,
+          rd2(sumMedia / (i + 1)),
+          rd2(sumScore / (i + 1)),
+          rd2(sumVentana / (i - desde + 1)),
+        ]);
+      }
+      const chartEvol = makeChart(
+        ExcelScript.ChartType.line,
+        writeBlock(
+          ['Fecha de review', 'Media acumulada', '3rd EYE acumulado', `Media últimos ${VENTANA}`],
+          evolucionRows,
+        ),
+        `Evolución de la media según se reseñan álbumes (${reviewed.length} con fecha)`,
+        ExcelScript.ChartSeriesBy.columns,
+        true,
+      );
+      const valoresEvolucion: number[] = evolucionRows
+        .flatMap(r => [r[1] as number, r[2] as number, r[3] as number]);
+      zoomValueAxis(chartEvol, valoresEvolucion);
+
+      // Media de los álbumes reseñados en cada mes: ¿hay meses "buenos" y meses "malos"?
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.columnClustered,
+          writeBlock(['Mes', 'Media del mes'], mesMedia),
+          'Media de los álbumes reseñados cada mes',
+        ),
+        mesMedia.map(r => r[1] as number),
       );
     }
 
@@ -2153,6 +2362,42 @@ function main(workbook: ExcelScript.Workbook) {
       );
     }
 
+    // ---------- 3b. Curva de percentiles de notas (ojiva) ----------
+    // Lee así: "el 90% de mis canciones están por debajo de X". Es el histograma
+    // visto de otra forma, pero deja ver de un vistazo dónde está el listón real.
+    if (todasLasNotas.length >= 20) {
+      const ord = [...todasLasNotas].sort((a, b) => a - b);
+      const percRows: (string | number)[][] = [];
+      for (let p = 0; p <= 100; p += 2) {
+        const idx = Math.min(ord.length - 1, Math.round((p / 100) * (ord.length - 1)));
+        percRows.push([`${p}%`, ord[idx]]);
+      }
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.line,
+          writeBlock(['Percentil', 'Nota'], percRows),
+          'Curva de percentiles de notas (el X% de canciones está por debajo)',
+        ),
+        percRows.map(r => r[1] as number),
+        0.04,
+      );
+    }
+
+    // ---------- 3c. Distribución del nº de canciones por álbum ----------
+    if (albums.length > 0) {
+      const cancionesCount: { [n: number]: number } = {};
+      for (const a of albums) cancionesCount[a.totalCanciones] = (cancionesCount[a.totalCanciones] || 0) + 1;
+      const ks = Object.keys(cancionesCount).map(s => Number(s)).sort((x, y) => x - y);
+      const rows: (string | number)[][] = [];
+      // Rellenamos los huecos para que el eje sea continuo y no mienta sobre la forma
+      for (let n = ks[0]; n <= ks[ks.length - 1]; n++) rows.push([`${n}`, cancionesCount[n] || 0]);
+      makeChart(
+        ExcelScript.ChartType.columnClustered,
+        writeBlock(['Nº de canciones', 'Álbumes'], rows),
+        'Distribución del nº de canciones por álbum',
+      );
+    }
+
     // ---------- 4 & 5 & 6. Por década / por año ----------
     const albumsAno = albums.filter(a => a.year > 0);
     if (albumsAno.length > 0) {
@@ -2169,11 +2414,14 @@ function main(workbook: ExcelScript.Workbook) {
         writeBlock(['Década', 'Álbumes'], decadas.map(d => [d, decadaMap[d].count])),
         'Álbumes por década',
       );
-      makeChart(
-        ExcelScript.ChartType.columnClustered,
-        writeBlock(['Década', '3rd EYE SCORE medio'],
-          decadas.map(d => [d, rd2(decadaMap[d].score / decadaMap[d].count)])),
-        '3rd EYE SCORE medio por década',
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.columnClustered,
+          writeBlock(['Década', '3rd EYE SCORE medio'],
+            decadas.map(d => [d, rd2(decadaMap[d].score / decadaMap[d].count)])),
+          '3rd EYE SCORE medio por década',
+        ),
+        decadas.map(d => rd2(decadaMap[d].score / decadaMap[d].count)),
       );
 
       const yearMap: { [y: number]: number } = {};
@@ -2195,11 +2443,14 @@ function main(workbook: ExcelScript.Workbook) {
       }
       const decadasDur = Object.keys(decadaDurMap).sort();
       if (decadasDur.length > 0) {
-        makeChart(
-          ExcelScript.ChartType.columnClustered,
-          writeBlock(['Década', 'Duración media (min)'],
-            decadasDur.map(d => [d, Math.round(decadaDurMap[d].sum / decadaDurMap[d].count)])),
-          'Duración media por década',
+        zoomValueAxis(
+          makeChart(
+            ExcelScript.ChartType.columnClustered,
+            writeBlock(['Década', 'Duración media (min)'],
+              decadasDur.map(d => [d, Math.round(decadaDurMap[d].sum / decadaDurMap[d].count)])),
+            'Duración media por década',
+          ),
+          decadasDur.map(d => Math.round(decadaDurMap[d].sum / decadaDurMap[d].count)),
         );
       }
     }
@@ -2229,6 +2480,7 @@ function main(workbook: ExcelScript.Workbook) {
       const parentData = parents.map(p => {
         const lista = generosPadreMap[p];
         const listaConDur = lista.filter(a => a.durationMinutes > 0);
+        const notasGenero: number[] = lista.flatMap(a => a.notaCancionesFull);
         return {
           nombre: p,
           count: lista.length,
@@ -2237,6 +2489,10 @@ function main(workbook: ExcelScript.Workbook) {
           avgDur: listaConDur.length > 0
             ? Math.round(listaConDur.reduce((s, a) => s + a.durationMinutes, 0) / listaConDur.length)
             : null as number | null,
+          pct10: notasGenero.length > 0
+            ? rd2(notasGenero.filter(v => v >= 10).length / notasGenero.length * 100)
+            : 0,
+          notas: notasGenero,
         };
       });
 
@@ -2255,27 +2511,83 @@ function main(workbook: ExcelScript.Workbook) {
       }
 
       const porMedia = [...parentData].sort((a, b) => a.media - b.media); // asc → mayor arriba en barras
-      makeChart(
-        ExcelScript.ChartType.barClustered,
-        writeBlock(['Género padre', 'Media'], porMedia.map(p => [p.nombre, p.media])),
-        'Media de notas por género padre',
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.barClustered,
+          writeBlock(['Género padre', 'Media'], porMedia.map(p => [p.nombre, p.media])),
+          'Media de notas por género padre',
+        ),
+        porMedia.map(p => p.media),
       );
 
       const porScore = [...parentData].sort((a, b) => a.score - b.score);
-      makeChart(
-        ExcelScript.ChartType.barClustered,
-        writeBlock(['Género padre', '3rd EYE SCORE'], porScore.map(p => [p.nombre, p.score])),
-        '3rd EYE SCORE medio por género padre',
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.barClustered,
+          writeBlock(['Género padre', '3rd EYE SCORE'], porScore.map(p => [p.nombre, p.score])),
+          '3rd EYE SCORE medio por género padre',
+        ),
+        porScore.map(p => p.score),
       );
 
       const porDuracionGenero = parentData
         .filter((p): p is typeof p & { avgDur: number } => p.avgDur !== null)
         .sort((a, b) => a.avgDur - b.avgDur);
       if (porDuracionGenero.length > 0) {
+        zoomValueAxis(
+          makeChart(
+            ExcelScript.ChartType.barClustered,
+            writeBlock(['Género padre', 'Duración media (min)'], porDuracionGenero.map(p => [p.nombre, p.avgDur])),
+            'Duración media por género padre',
+          ),
+          porDuracionGenero.map(p => p.avgDur),
+        );
+      }
+
+      // % de canciones sobresalientes (≥10) por género. La media esconde esto:
+      // un género puede tener media discreta y aun así concentrar temazos.
+      const porPct10 = [...parentData].sort((a, b) => a.pct10 - b.pct10);
+      zoomValueAxis(
         makeChart(
           ExcelScript.ChartType.barClustered,
-          writeBlock(['Género padre', 'Duración media (min)'], porDuracionGenero.map(p => [p.nombre, p.avgDur])),
-          'Duración media por género padre',
+          writeBlock(['Género padre', '% notas ≥10'], porPct10.map(p => [p.nombre, p.pct10])),
+          '% de canciones con nota ≥10 por género padre',
+        ),
+        porPct10.map(p => p.pct10),
+      );
+
+      // Reparto de notas dentro de cada género (columnas 100% apiladas).
+      // Cada columna suma 100%: se compara la FORMA de la distribución, no el volumen,
+      // así un género con 40 álbumes y otro con 6 se pueden mirar de tú a tú.
+      const cortes: number[] = [7, 8, 9, 10]; // fronteras entre tramos
+      const tramos: string[] = ['< 7', '7 - 8', '8 - 9', '9 - 10', '≥ 10'];
+      const generosReparto = [...parentData]
+        .filter(p => p.notas.length > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 12);
+
+      const repartoRows: (string | number)[][] = [];
+      for (const p of generosReparto) {
+        const conteo: number[] = new Array(tramos.length).fill(0);
+        for (const v of p.notas) {
+          let idx = 0;
+          while (idx < cortes.length && v >= cortes[idx]) idx++;
+          conteo[idx]++;
+        }
+        const fila: (string | number)[] = [p.nombre];
+        for (const c of conteo) fila.push(c);
+        repartoRows.push(fila);
+      }
+
+      if (repartoRows.length > 0) {
+        const cabeceraReparto: string[] = ['Género padre'];
+        for (const t of tramos) cabeceraReparto.push(t);
+        makeChart(
+          ExcelScript.ChartType.columnStacked100,
+          writeBlock(cabeceraReparto, repartoRows),
+          'Reparto de notas dentro de cada género padre',
+          ExcelScript.ChartSeriesBy.columns,
+          true,
         );
       }
     }
@@ -2308,10 +2620,13 @@ function main(workbook: ExcelScript.Workbook) {
         const mediaN = notasN.reduce((s, n) => s + n, 0) / notasN.length;
         posRows.push([`${i + 1}`, rd2(mediaN)]);
       }
-      makeChart(
-        ExcelScript.ChartType.lineMarkers,
-        writeBlock(['Nº de canción', 'Media'], posRows),
-        'Media de nota según la posición de la canción',
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.lineMarkers,
+          writeBlock(['Nº de canción', 'Media'], posRows),
+          'Media de nota según la posición de la canción',
+        ),
+        posRows.map(r => r[1] as number),
       );
     }
 
@@ -2327,10 +2642,13 @@ function main(workbook: ExcelScript.Workbook) {
           pctRows.push([`${p}%`, rd2(notasP.reduce((s, n) => s + n, 0) / notasP.length)]);
         }
       }
-      makeChart(
-        ExcelScript.ChartType.lineMarkers,
-        writeBlock(['% del álbum', 'Media'], pctRows),
-        'Media de nota según el % de avance del álbum',
+      zoomValueAxis(
+        makeChart(
+          ExcelScript.ChartType.lineMarkers,
+          writeBlock(['% del álbum', 'Media'], pctRows),
+          'Media de nota según el % de avance del álbum',
+        ),
+        pctRows.map(r => r[1] as number),
       );
     }
 
@@ -2379,9 +2697,17 @@ function main(workbook: ExcelScript.Workbook) {
     }
 
     // ---------- 16-19. Dispersiones contra el 3rd EYE SCORE ----------
-    function scatter(puntos: [number, number][], headerX: string, titulo: string): void {
+    function scatter(
+      puntos: [number, number][],
+      headerX: string,
+      titulo: string,
+      headerY: string = '3rd EYE SCORE',
+    ): void {
+      if (puntos.length === 0) return;
       const rows = puntos.map(p => [p[0], p[1]] as (string | number)[]);
-      makeChart(ExcelScript.ChartType.xyscatter, writeBlock([headerX, '3rd EYE SCORE'], rows, false), titulo);
+      const chart = makeChart(ExcelScript.ChartType.xyscatter, writeBlock([headerX, headerY], rows, false), titulo);
+      // Sin esto la nube de puntos se apelotona en una esquina (eje Y desde 0, eje X desde 0)
+      zoomScatterAxes(chart, puntos.map(p => p[0]), puntos.map(p => p[1]));
     }
     scatter(albumsAno.map(a => [a.year, a.thirdEyeScore]), 'Año', 'Año vs 3rd EYE SCORE');
     const albumsDur = albums.filter(a => a.durationMinutes > 0);
@@ -2389,12 +2715,65 @@ function main(workbook: ExcelScript.Workbook) {
     scatter(albums.map(a => [a.totalCanciones, a.thirdEyeScore]), 'Nº canciones', 'Nº de canciones vs 3rd EYE SCORE');
     scatter(albums.map(a => [a.desviacionTipica, a.thirdEyeScore]), 'Desv. típica', 'Consistencia (desv. típica) vs 3rd EYE SCORE');
 
+    // ---------- 19b. ¿Reseño música más antigua o más nueva según pasa el tiempo? ----------
+    // X = fecha de review (año con decimales), Y = año de publicación del álbum.
+    {
+      const puntosExploracion: [number, number][] = albums
+        .filter(a => a.year > 0 && a.dateOfReviewTimestamp > 0)
+        .map(a => {
+          const d = new Date(a.dateOfReviewTimestamp);
+          const anoDecimal = d.getUTCFullYear() + (d.getUTCMonth() + (d.getUTCDate() - 1) / 31) / 12;
+          return [round4(anoDecimal), a.year] as [number, number];
+        });
+      scatter(
+        puntosExploracion,
+        'Fecha de review',
+        'Año del álbum vs fecha en que lo reseñé',
+        'Año del álbum',
+      );
+    }
+
+    // ---------- 19c. Correlaciones con el 3rd EYE SCORE ----------
+    // La versión visual de la sección de correlaciones del Resumen.
+    // Eje fijo −1..1: aquí el 0 SÍ significa algo (correlación nula), no se hace zoom.
+    {
+      const scoresCorr = albums.map(a => a.thirdEyeScore);
+      const pares: [string, number][] = [
+        ['Nº canciones', pearsonCorr(albums.map(a => a.totalCanciones), scoresCorr)],
+        ['Interludios', pearsonCorr(albums.map(a => a.interludios), scoresCorr)],
+        ['% interludios', pearsonCorr(albums.map(a => a.totalCanciones > 0 ? a.interludios / a.totalCanciones : 0), scoresCorr)],
+        ['Desv. típica', pearsonCorr(albums.map(a => a.desviacionTipica), scoresCorr)],
+        ['Notas ≥10', pearsonCorr(albums.map(a => a.notasMayoresIgual10), scoresCorr)],
+      ];
+      if (albumsAno.length >= 3) {
+        pares.push(['Año', pearsonCorr(albumsAno.map(a => a.year), albumsAno.map(a => a.thirdEyeScore))]);
+      }
+      if (albumsDur.length >= 3) {
+        pares.push(['Duración', pearsonCorr(albumsDur.map(a => a.durationMinutes), albumsDur.map(a => a.thirdEyeScore))]);
+      }
+      const paresOrdenados = pares.slice().sort((a, b) => a[1] - b[1]); // asc → la más positiva arriba
+      const chartCorr = makeChart(
+        ExcelScript.ChartType.barClustered,
+        writeBlock(['Variable', 'r'], paresOrdenados.map(p => [p[0], p[1]] as (string | number)[])),
+        'Correlación de cada variable con el 3rd EYE SCORE',
+      );
+      if (chartCorr) {
+        const ejeCorr = chartCorr.getAxes().getValueAxis();
+        ejeCorr.setMinimum(-1);
+        ejeCorr.setMaximum(1);
+        ejeCorr.setMajorUnit(0.25);
+      }
+    }
+
     // ---------- 20. Top 15 álbumes por 3rd EYE SCORE ----------
     {
       const top15 = albums.slice().sort((a, b) => b.thirdEyeScore - a.thirdEyeScore).slice(0, 15);
       const rows = top15.map(a => [`${a.artista} - ${a.album}`, a.thirdEyeScore] as (string | number)[]).reverse();
-      makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', '3rd EYE SCORE'], rows),
-        'Top 15 álbumes por 3rd EYE SCORE');
+      zoomValueAxis(
+        makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', '3rd EYE SCORE'], rows),
+          'Top 15 álbumes por 3rd EYE SCORE'),
+        top15.map(a => a.thirdEyeScore),
+      );
     }
 
     // ---------- 20b. Top 15 álbumes más largos ----------
@@ -2405,8 +2784,11 @@ function main(workbook: ExcelScript.Workbook) {
         const rows = top15Dur
           .map(a => [`${a.artista} - ${a.album} (${minutesToDisplay(a.durationMinutes)})`, a.durationMinutes] as (string | number)[])
           .reverse();
-        makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', 'Duración (min)'], rows),
-          'Top 15 álbumes más largos');
+        zoomValueAxis(
+          makeChart(ExcelScript.ChartType.barClustered, writeBlock(['Álbum', 'Duración (min)'], rows),
+            'Top 15 álbumes más largos'),
+          top15Dur.map(a => a.durationMinutes),
+        );
       }
     }
 
@@ -2429,11 +2811,32 @@ function main(workbook: ExcelScript.Workbook) {
           }))
           .sort((x, y) => y.media - x.media)
           .slice(0, 15);
-        makeChart(
-          ExcelScript.ChartType.barClustered,
-          writeBlock(['Artista', 'Media'],
-            porMedia.map(r => [`${r.art} (${r.n})`, r.media] as (string | number)[]).reverse()),
-          'Top 15 artistas (≥2 álbumes) por media',
+        zoomValueAxis(
+          makeChart(
+            ExcelScript.ChartType.barClustered,
+            writeBlock(['Artista', 'Media'],
+              porMedia.map(r => [`${r.art} (${r.n})`, r.media] as (string | number)[]).reverse()),
+            'Top 15 artistas (≥2 álbumes) por media',
+          ),
+          porMedia.map(r => r.media),
+        );
+
+        const porScoreArtista = repe
+          .map(a => ({
+            art: a,
+            n: artistasMap[a].length,
+            score: rd2(artistasMap[a].reduce((s, x) => s + x.thirdEyeScore, 0) / artistasMap[a].length),
+          }))
+          .sort((x, y) => y.score - x.score)
+          .slice(0, 15);
+        zoomValueAxis(
+          makeChart(
+            ExcelScript.ChartType.barClustered,
+            writeBlock(['Artista', '3rd EYE SCORE'],
+              porScoreArtista.map(r => [`${r.art} (${r.n})`, r.score] as (string | number)[]).reverse()),
+            'Top 15 artistas (≥2 álbumes) por 3rd EYE SCORE',
+          ),
+          porScoreArtista.map(r => r.score),
         );
 
         const porCount = repe
@@ -2461,11 +2864,14 @@ function main(workbook: ExcelScript.Workbook) {
           .sort((x, y) => y.avgDur - x.avgDur)
           .slice(0, 15);
         if (porDuracionArtista.length > 0) {
-          makeChart(
-            ExcelScript.ChartType.barClustered,
-            writeBlock(['Artista', 'Duración media (min)'],
-              porDuracionArtista.map(r => [`${r.art} (${minutesToDisplay(r.avgDur)})`, r.avgDur] as (string | number)[]).reverse()),
-            'Top 15 artistas (≥2 álbumes) por duración media',
+          zoomValueAxis(
+            makeChart(
+              ExcelScript.ChartType.barClustered,
+              writeBlock(['Artista', 'Duración media (min)'],
+                porDuracionArtista.map(r => [`${r.art} (${minutesToDisplay(r.avgDur)})`, r.avgDur] as (string | number)[]).reverse()),
+              'Top 15 artistas (≥2 álbumes) por duración media',
+            ),
+            porDuracionArtista.map(r => r.avgDur),
           );
         }
       }
@@ -2474,4 +2880,11 @@ function main(workbook: ExcelScript.Workbook) {
     console.log(`Hoja "Graficos" regenerada con ${chartIndex} gráficos.`);
   }
   renderGraficos(albumsComp, todasLasNotasComp, generosPadreMapComp);
+
+  // =================== VACÍA LAS LÍNEAS DE INFO APLICADAS ===================
+  // Al final del todo: si el script falla antes, la línea sigue en su celda y no se pierde.
+  for (const info of lineasInfo) {
+    usedRange.getCell(info.fila, info.columna).clear(ExcelScript.ClearApplyTo.contents);
+  }
+  if (lineasInfo.length > 0) console.log(`Vaciadas ${lineasInfo.length} líneas de info en "Albums".`);
 }
